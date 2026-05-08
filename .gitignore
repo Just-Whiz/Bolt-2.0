@@ -1,4 +1,3 @@
 .env
 .log
 credentials.json
-!test_credentials.json
