@@ -45,11 +45,58 @@ for lib in ("discord", "discord.http", "discord.gateway", "gspread", "google"):
     lib_logger = logging.getLogger(lib)
     lib_logger.setLevel(logging.DEBUG)
     lib_logger.addHandler(file_handler)
-    lib_logger.propagate = False
+    lib_logger.propagate = False # Ensures a line won't be logged twice by ancestor handlers
 
 handler = file_handler
 
-# Google Spreadsheet website scopes
+# Role setup 
+
+# Roles for Roblox rank progression (lowest to highest)
+RANK_PROGRESSION = [
+    "Guest",
+    "Citoyen",
+    "Conscrit",
+    "Soldat", 
+    "Caporal",
+    "Caporal Fourrier"
+    "Admin",
+    "Owner"
+]
+
+# Discord role placeholders - to be swapped for exact role names
+DISCORD_RANK_ROLES = {
+    "Conscrit": "Conscrit",
+    "Soldat": "Soldat",
+    "Caporal": "Caporal",
+    "Caporal Fourrier": "Caporal Fourrier"
+}
+
+# Discord Company Roles
+DISCORD_COMPANY_ROLES = {
+    '7EME':  '7EME',
+    '8EME':  '8EME',
+    'FLQG':  'FLQG',
+    'FLQC':  'FLQC',
+    '4EME':  '4EME',
+    '5EME':  '5EME',
+    '6EME':  '6EME',
+}
+
+GARDE_NATIONALE_ROLE = "Garde Nationale" # Swapping for actual GN role
+BASE_ROLES = ["Member", "Verified"]
+
+# Matching companies to timezone for Google Sheet logging
+COMPANY_TIMEZONE = {
+    '7EME': 'EUNA',
+    '8EME': 'EUNA',
+    'FLQG': 'EUNA',
+    '4EME': 'ASOC',
+    '5EME': 'ASOC', 
+    '6EME': 'ASOC',
+    'FLQC': 'ASOC',
+    }
+
+# Google Spreadsheet setup
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets"
     "https://www.googleapis.com/auth/drive"
