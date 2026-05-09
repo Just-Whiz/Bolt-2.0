@@ -28,7 +28,11 @@ SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
 LOG_SHEET_NAME = os.getenv("LOG_SHEET_NAME", "Garde Nationale Test Example")
 BLOXLINK_API_KEY = os.getenv("BLOXLINK_API_KEY")
 ROBLOX_OPEN_CLOUD = os.getenv("ROBLOX_OPEN_CLOUD_KEY")
+
+print(f"[CONFIG] Open Cloud key loaded: {bool(ROBLOX_OPEN_CLOUD)} | Value start: {str(ROBLOX_OPEN_CLOUD)[:8] if ROBLOX_OPEN_CLOUD else 'NONE'}")
+
 ROBLOX_GROUP_ID = os.getenv("ROBLOX_GROUP_ID", "772916015")
+GUILD_ID = os.getenv("GUILD_ID")
 
 VERIFIED_USERS_PATH = "verified_users.json"
 
@@ -53,7 +57,6 @@ for lib in ("discord", "discord.http", "discord.gateway", "gspread", "google"):
 handler = file_handler
 
 # Role setup 
-
 # Roles for Roblox rank progression (lowest to highest)
 RANK_PROGRESSION = [
     "Guest",
@@ -99,11 +102,13 @@ COMPANY_TIMEZONE = {
     'FLQC': 'ASOC',
     }
 
+
 # Google Spreadsheet setup
 SCOPES = [
     'https://www.googleapis.com/auth/spreadsheets',
     'https://www.googleapis.com/auth/drive'
 ]
+
 
 # Regex Formatter
 KNOWN_COMPANIES     = '|'.join(re.escape(c) for c in COMPANY_TIMEZONE.keys())
@@ -111,8 +116,8 @@ COMPANY_PATTERN     = re.compile(rf'\*\*\s*({KNOWN_COMPANIES})\s*\*\*')
 MENTION_PATTERN     = re.compile(r'<@!?(\d+)>')
 GRADUATION_TRIGGER  = 'Garde Nationale Graduates'
 
-# JSON Cache Handler
 
+# JSON Cache Handler
 def load_verified_users() -> dict:
     if os.path.exists(VERIFIED_USERS_PATH):
         with open(VERIFIED_USERS_PATH, 'r') as f:
@@ -139,7 +144,6 @@ def cache_roblox_user(discord_id: str, roblox_id: str, roblox_username: str):
     bolt_log.info(f"[CACHE] Cached {discord_id} → {roblox_username} ({roblox_id})")
 
 
-
 # BLOXLINK API
 async def get_roblox_user(discord_id: str) -> dict | None:
     """
@@ -155,27 +159,33 @@ async def get_roblox_user(discord_id: str) -> dict | None:
         bolt_log.error("[BLOXLINK] No API key configured.")
         return None
 
-    url = f"https://api.blox.link/v4/public/discord-to-roblox/{discord_id}"
+    url = f"https://api.blox.link/v4/public/guilds/{GUILD_ID}/discord-to-roblox/{discord_id}"
     headers = {'Authorization': BLOXLINK_API_KEY}
+
+    print(f"[BLOXLINK] CALLING: {url}")
 
     async with aiohttp.ClientSession() as session:
         async with session.get(url, headers=headers) as resp:
+            print(f"[BLOXLINK] Response status: {resp.status}")
+            body = await resp.json()
+            print(f"[BLOXLINK] Response body: {body}")
+
             if resp.status != 200:
                 bolt_log.warning(f"[BLOXLINK] Lookup failed for {discord_id}: HTTP {resp.status}")
                 return None
-            data = await resp.json()
-            roblox_id = str(data.get('robloxID') or data.get('roblox_id', ''))
+
+            roblox_id = str(body.get('robloxID') or body.get('roblox_id', ''))
             if not roblox_id:
-                bolt_log.warning(f"[BLOXLINK] No Roblox ID in response for {discord_id}: {data}")
+                bolt_log.warning(f"[BLOXLINK] No Roblox ID in response: {body}")
                 return None
 
-    # Fetch username from Roblox
     username = await get_roblox_username(roblox_id)
     if username:
         cache_roblox_user(discord_id, roblox_id, username)
         return {'roblox_id': roblox_id, 'roblox_username': username}
 
     return None
+
 
 # Roblox Open Cloud API
 ROBLOX_OC_HEADERS = lambda: {
@@ -234,62 +244,77 @@ async def get_group_rank(roblox_id: str, group_id: str) -> str | None:
     return None
 
 async def set_group_rank(roblox_id: str, group_id: str, rank_name: str) -> bool:
-    """
-    Sets a user's rank in a group by rank name using Open Cloud.
-    First fetches the rank ID for the given rank name, then sets it.
-    """
+    """Sets a user's rank in a group by rank name using Open Cloud."""
     if not ROBLOX_OPEN_CLOUD:
         bolt_log.error("[ROBLOX] No Open Cloud key configured.")
         return False
 
-    # Step 1: get all roles in the group to find the rank ID
+     # Step 1: Get all roles to find the role path matching rank_name
     roles_url = f"https://apis.roblox.com/cloud/v2/groups/{group_id}/roles"
     async with aiohttp.ClientSession() as session:
         async with session.get(roles_url, headers=ROBLOX_OC_HEADERS()) as resp:
+            print(f"[ROBLOX] Get roles status: {resp.status}")
             if resp.status != 200:
-                bolt_log.error(f"[ROBLOX] Failed to fetch roles: HTTP {resp.status}")
+                body = await resp.text()
+                print(f"[ROBLOX] Get roles error: {body}")
                 return False
             roles_data = await resp.json()
+            print(f"[ROBLOX] Roles data: {roles_data}")
 
-    rank_id = None
+    role_path = None
     for role in roles_data.get('groupRoles', []):
-        if role['name'].strip().lower() == rank_name.strip().lower():
-            rank_id = role['id']
+        print(f"[ROBLOX] Available role: '{role.get('displayName')}' path: {role.get('path')}")
+        display_name = role.get('displayName', '').strip().lower()
+        print(f"[ROBLOX] Checking role: '{display_name}' vs '{rank_name.lower()}'")
+        if display_name == rank_name.strip().lower():
+            role_path = role.get('path')
             break
 
-    if not rank_id:
+    if not role_path:
+        print(f"[ROBLOX] Role '{rank_name}' not found in group roles")
         bolt_log.error(f"[ROBLOX] Rank '{rank_name}' not found in group {group_id}")
         return False
 
-    # Step 2: set the rank
-    patch_url = f"https://apis.roblox.com/cloud/v2/groups/{group_id}/memberships/{roblox_id}"
-    payload = {'role': f"groups/{group_id}/roles/{rank_id}"}
-    async with aiohttp.ClientSession() as session:
-        async with session.patch(patch_url, headers=ROBLOX_OC_HEADERS(), json=payload) as resp:
-            success = resp.status in (200, 204)
-            if not success:
-                body = await resp.text()
-                bolt_log.error(f"[ROBLOX] Failed to set rank: HTTP {resp.status} — {body}")
-            return success
+    print(f"[ROBLOX] Found role path: {role_path}")
 
-async def accept_join_request(roblox_id: str, group_id: str) -> bool:
-    """Accepts a pending join request using Open Cloud."""
-    if not ROBLOX_OPEN_CLOUD:
-        bolt_log.error("[ROBLOX] No Open Cloud key configured.")
+    # Step 2: Find the membership ID for this user
+    # The membership ID is NOT the same as the Roblox user ID
+    memberships_url = f"https://apis.roblox.com/cloud/v2/groups/{group_id}/memberships"
+    params = {'filter': f"user == 'users/{roblox_id}'"}
+    async with aiohttp.ClientSession() as session:
+        async with session.get(memberships_url, headers=ROBLOX_OC_HEADERS(), params=params) as resp:
+            print(f"[ROBLOX] Get membership status: {resp.status}")
+            body = await resp.text()
+            print(f"[ROBLOX] Get membership response: {body}")
+            if resp.status != 200:
+                bolt_log.error(f"[ROBLOX] Failed to fetch membership: HTTP {resp.status}")
+                return False
+            membership_data = await resp.json()
+
+    memberships = membership_data.get('groupMemberships', [])
+    if not memberships:
+        print(f"[ROBLOX] No membership found for user {roblox_id} in group {group_id}")
+        bolt_log.error(f"[ROBLOX] User {roblox_id} is not a member of group {group_id}")
         return False
 
-    url = f"https://apis.roblox.com/cloud/v2/groups/{group_id}/join-requests/{roblox_id}:accept"
+    membership_path = memberships[0].get('path')
+    print(f"[ROBLOX] Found membership path: {membership_path}")
+
+    # Step 3: PATCH the membership with the new role
+    patch_url = f"https://apis.roblox.com/cloud/v2/{membership_path}"
+    payload = {'role': role_path}
     async with aiohttp.ClientSession() as session:
-        async with session.post(url, headers=ROBLOX_OC_HEADERS()) as resp:
+        async with session.patch(patch_url, headers=ROBLOX_OC_HEADERS(), json=payload) as resp:
+            print(f"[ROBLOX] Set rank status: {resp.status}")
+            body = await resp.text()
+            print(f"[ROBLOX] Set rank response: {body}")
             success = resp.status in (200, 204)
             if not success:
-                body = await resp.text()
-                bolt_log.error(f"[ROBLOX] Failed to accept join request: HTTP {resp.status} — {body}")
+                bolt_log.error(f"[ROBLOX] Failed to set rank: HTTP {resp.status} — {body}")
             return success
 
 
 #  GOOGLE SHEETS
-
 def get_timezone(company: str) -> str:
     return COMPANY_TIMEZONE.get(company.strip(), 'UNKNOWN')
 
@@ -319,11 +344,7 @@ class SheetsLogger:
         else:
             bolt_log.warning("[SHEETS] log_recruits called with empty list.")
 
-
-# ─────────────────────────────────────────────
 #  GRADUATION MESSAGE PARSER
-# ─────────────────────────────────────────────
-
 async def parse_graduation_message(message: discord.Message) -> list[list]:
     content    = message.content
     host       = str(message.author)
@@ -365,10 +386,7 @@ async def parse_graduation_message(message: discord.Message) -> list[list]:
     return rows
 
 
-# ─────────────────────────────────────────────
 #  BOT SETUP
-# ─────────────────────────────────────────────
-
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
@@ -420,10 +438,8 @@ async def on_message(message):
     await bot.process_commands(message)
 
 
-# ─────────────────────────────────────────────
-#  /background-check
-# ─────────────────────────────────────────────
 
+#  /background-check
 @bot.tree.command(name="background-check", description="Run a background check on one or more users.")
 @app_commands.describe(users="Mention one or more users to check")
 async def background_check(interaction: discord.Interaction, users: str):
@@ -477,23 +493,73 @@ async def background_check(interaction: discord.Interaction, users: str):
         bolt_log.info(f"[BG CHECK] Ran background check on {roblox_username} ({roblox_id})")
 
 
-# ─────────────────────────────────────────────
 #  /accept
-# ─────────────────────────────────────────────
+async def accept_join_request(roblox_id: str, group_id: str) -> bool:
+    """
+    Accepts a pending join request using Open Cloud.
+    Must first list join requests to find the request path,
+    then POST to accept it.
+    """
+    if not ROBLOX_OPEN_CLOUD:
+        bolt_log.error("[ROBLOX] No Open Cloud key configured.")
+        return False
 
+    # Step 1: List all pending join requests to find this user's request path
+    list_url = f"https://apis.roblox.com/cloud/v2/groups/{group_id}/join-requests"
+    request_path = None
+
+    async with aiohttp.ClientSession() as session:
+        params = {'maxPageSize': 100}
+        async with session.get(list_url, headers=ROBLOX_OC_HEADERS(), params=params) as resp:
+            print(f"[ROBLOX] List join requests status: {resp.status}")
+            if resp.status != 200:
+                body = await resp.text()
+                print(f"[ROBLOX] List join requests error: {body}")
+                bolt_log.error(f"[ROBLOX] Failed to list join requests: HTTP {resp.status} — {body}")
+                return False
+            data = await resp.json()
+            print(f"[ROBLOX] Join requests response: {data}")
+
+            for request in data.get('groupJoinRequests', []):
+                # path looks like "groups/772916015/join-requests/1203721042"
+                # user looks like "users/1203721042"
+                user_field = request.get('user', '')
+                if str(roblox_id) in user_field:
+                    request_path = request.get('path')
+                    break
+
+    if not request_path:
+        print(f"[ROBLOX] No pending join request found for Roblox ID {roblox_id}")
+        bolt_log.warning(f"[ROBLOX] No pending join request found for {roblox_id}")
+        return False
+
+    # Step 2: Accept the request using its path
+    accept_url = f"https://apis.roblox.com/cloud/v2/{request_path}:accept"
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            accept_url,
+            headers=ROBLOX_OC_HEADERS(),
+            json={}  # ← Roblox requires an empty JSON body, not no body
+        ) as resp:
+            print(f"[ROBLOX] Accept join request status: {resp.status}")
+            body = await resp.text()
+            print(f"[ROBLOX] Accept response: {body}")
+            success = resp.status in (200, 204)
+            if not success:
+                bolt_log.error(f"[ROBLOX] Failed to accept join request: HTTP {resp.status} — {body}")
+            return success
+        
+# 1. AcceptGroupSelect FIRST
 class AcceptGroupSelect(discord.ui.Select):
     def __init__(self, discord_ids: list[str], roblox_data: dict):
         self.discord_ids = discord_ids
-        self.roblox_data = roblox_data  # discord_id → {roblox_id, roblox_username}
+        self.roblox_data = roblox_data
         options = [
             discord.SelectOption(
                 label="Bandits Hideout (Test Group)",
                 value=ROBLOX_GROUP_ID,
                 description="Accept into the test Roblox group"
             ),
-            # Add Empire Français and Cavalry Corps group IDs here when ready
-            # discord.SelectOption(label="Empire Français", value="EMPIRE_GROUP_ID"),
-            # discord.SelectOption(label="Cavalry Corps",   value="CAVALRY_GROUP_ID"),
         ]
         super().__init__(placeholder="Select which group to accept into...", options=options)
 
@@ -511,7 +577,6 @@ class AcceptGroupSelect(discord.ui.Select):
             roblox_id       = roblox['roblox_id']
             roblox_username = roblox['roblox_username']
 
-            # Check if already in group
             current_rank = await get_group_rank(roblox_id, group_id)
             if current_rank and current_rank.lower() != 'guest':
                 results.append(f"⚠️ **{roblox_username}** — already in group as {current_rank}, skipping")
@@ -519,7 +584,7 @@ class AcceptGroupSelect(discord.ui.Select):
 
             accepted = await accept_join_request(roblox_id, group_id)
             if not accepted:
-                results.append(f"❌ **{roblox_username}** — failed to accept join request (no pending request?)")
+                results.append(f"❌ **{roblox_username}** — failed to accept (no pending request?)")
                 continue
 
             ranked = await set_group_rank(roblox_id, group_id, 'Citoyen')
@@ -530,49 +595,45 @@ class AcceptGroupSelect(discord.ui.Select):
 
             bolt_log.info(f"[ACCEPT] Accepted {roblox_username} into group {group_id}")
 
-        result_text = '\n'.join(results)
-        await interaction.followup.send(f"**Accept Results**\n{result_text}")
+        await interaction.followup.send(f"**Accept Results**\n" + '\n'.join(results))
         self.view.stop()
-
 
 class AcceptView(discord.ui.View):
     def __init__(self, discord_ids: list[str], roblox_data: dict):
         super().__init__(timeout=60)
         self.add_item(AcceptGroupSelect(discord_ids, roblox_data))
 
-
+# 3. /accept command LAST
 @bot.tree.command(name="accept", description="Accept one or more users into a Roblox group.")
 @app_commands.describe(users="Mention one or more users to accept")
 async def accept(interaction: discord.Interaction, users: str):
+    print(f"[ACCEPT] Command fired by {interaction.user} with input: {users}")
     await interaction.response.defer()
     mentioned_ids = MENTION_PATTERN.findall(users)
     if not mentioned_ids:
         await interaction.followup.send("Please mention at least one user.")
         return
 
-    # Pre-fetch all Roblox data
     roblox_data = {}
     for discord_id in mentioned_ids:
         roblox = await get_roblox_user(discord_id)
         if roblox:
             roblox_data[discord_id] = roblox
         else:
-            bolt_log.warning(f"[ACCEPT] Could not resolve Roblox for Discord ID {discord_id}")
+            bolt_log.warning(f"[ACCEPT] Could not resolve Roblox for {discord_id}")
 
     view = AcceptView(mentioned_ids, roblox_data)
     await interaction.followup.send("Which group would you like to accept these users into?", view=view)
 
 
-# ─────────────────────────────────────────────
 #  /induct
-# ─────────────────────────────────────────────
-
 @bot.tree.command(name="induct", description="Induct one or more recruits into the regiment.")
 @app_commands.describe(
     users="Mention one or more users to induct",
     company="The company to assign (e.g. 7EME, FLQG)"
 )
 async def induct(interaction: discord.Interaction, users: str, company: str):
+    print("[INDUCT] Command fired")
     await interaction.response.defer()
     company = company.upper().strip()
 
@@ -683,16 +744,14 @@ async def induct(interaction: discord.Interaction, users: str, company: str):
         bolt_log.info(f"[INDUCT] Inducted {roblox_username} into {company}")
 
 
-# ─────────────────────────────────────────────
 #  /draft
-# ─────────────────────────────────────────────
-
 @bot.tree.command(name="draft", description="Draft a user to a new company, resetting their rank.")
 @app_commands.describe(
     users="Mention one or more users to draft",
     new_company="The new company to assign"
 )
 async def draft(interaction: discord.Interaction, users: str, new_company: str):
+    print("[DRAFT] Command fired")
     await interaction.response.defer()
     new_company = new_company.upper().strip()
 
