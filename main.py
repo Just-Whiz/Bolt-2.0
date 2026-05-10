@@ -753,7 +753,7 @@ async def induct(interaction: discord.Interaction, users: str, company: str):
             await interaction.followup.send('\n'.join(lines))
             continue
 
-        roblox_id       = roblox['roblox_id']
+        roblox_id = roblox['roblox_id']
         roblox_username = roblox['roblox_username']
 
         # Check group membership — must be at least Citoyen
@@ -882,9 +882,9 @@ async def draft(interaction: discord.Interaction, users: str, new_company: str):
             await interaction.followup.send('\n'.join(lines))
             continue
 
-        roblox_id       = roblox['roblox_id']
+        roblox_id = roblox['roblox_id']
         roblox_username = roblox['roblox_username']
-        guild           = interaction.guild
+        guild = interaction.guild
 
         # Remove all existing company roles
         removed_companies = []
