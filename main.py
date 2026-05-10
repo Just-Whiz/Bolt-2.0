@@ -58,50 +58,6 @@ handler = file_handler
 
 # Role setup 
 # Roles for Roblox rank progression (lowest to highest)
-RANK_PROGRESSION = [
-    "Guest",
-    "Citoyen",
-    "Conscrit",
-    "Soldat", 
-    "Caporal",
-    "Caporal Fourrier"
-    "Admin",
-    "Owner"
-]
-
-# Discord role placeholders - to be swapped for exact role names
-DISCORD_RANK_ROLES = {
-    "Conscrit": "Conscrit",
-    "Soldat": "Soldat",
-    "Caporal": "Caporal",
-    "Caporal Fourrier": "Caporal Fourrier"
-}
-
-# Discord Company Roles
-DISCORD_COMPANY_ROLES = {
-    '7EME':  '7EME',
-    '8EME':  '8EME',
-    'FLQG':  'FLQG',
-    'FLQC':  'FLQC',
-    '4EME':  '4EME',
-    '5EME':  '5EME',
-    '6EME':  '6EME',
-}
-
-GARDE_NATIONALE_ROLE = "Garde Nationale" # Swapping for actual GN role
-BASE_ROLES = ["Member", "Verified"]
-
-# Matching companies to timezone for Google Sheet logging
-COMPANY_TIMEZONE = {
-    '7EME': 'EUNA',
-    '8EME': 'EUNA',
-    'FLQG': 'EUNA',
-    '4EME': 'ASOC',
-    '5EME': 'ASOC', 
-    '6EME': 'ASOC',
-    'FLQC': 'ASOC',
-    }
-
 
 # Google Spreadsheet setup
 SCOPES = [
@@ -947,26 +903,6 @@ async def draft(interaction: discord.Interaction, users: str, new_company: str):
 
         await interaction.followup.send('\n'.join(lines))
         bolt_log.info(f"[DRAFT] Drafted {roblox_username} to {new_company}")
-
-#  LEGACY COMMANDS
-server_role = "gamer"
-
-@bot.event
-async def on_member_join(member):
-    await member.send(f"Welcome to the server {member.name}!")
-
-@bot.command()
-async def hello(ctx):
-    await ctx.send(f"Hello {ctx.author.mention}!")
-
-@bot.command()
-async def assign(ctx):
-    role = discord.utils.get(ctx.guild.roles, name=server_role)
-    if role:
-        await ctx.author.add_roles(role)
-        await ctx.send(f"{ctx.author.mention} has been assigned the {server_role} role.")
-    else:
-        await ctx.send("Role doesn't exist.")
 
 
 bot.run(token, log_handler=handler, log_level=logging.DEBUG)
