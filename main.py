@@ -13,12 +13,11 @@ import os
 import re
 import json
 import aiohttp
+import asyncio
 from dotenv import load_dotenv
 from datetime import timezone, datetime
 import gspread
 from google.oauth2.service_account import Credentials
-
-print("hello world!")
 
 load_dotenv()
 
@@ -35,6 +34,7 @@ ROBLOX_GROUP_ID = os.getenv("ROBLOX_GROUP_ID", "772916015")
 GUILD_ID = os.getenv("GUILD_ID")
 
 VERIFIED_USERS_PATH = "verified_users.json"
+AIOHTTP_TIMEOUT = aiohttp.ClientTimeout(total=10)
 
 # Logging setup
 LOG_FILE = "bolt.log"
@@ -164,7 +164,7 @@ async def get_roblox_user(discord_id: str) -> dict | None:
 
     print(f"[BLOXLINK] CALLING: {url}")
 
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
         async with session.get(url, headers=headers) as resp:
             print(f"[BLOXLINK] Response status: {resp.status}")
             body = await resp.json()
@@ -198,7 +198,7 @@ print(f"[CONFIG] ROBLOX_OC_HEADERS x-api-key present: {bool(ROBLOX_OPEN_CLOUD)}"
 
 async def get_roblox_username(roblox_id: str) -> str | None:
     url = f"https://users.roblox.com/v1/users/{roblox_id}"
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
         async with session.get(url) as resp:
             if resp.status != 200:
                 return None
@@ -207,7 +207,7 @@ async def get_roblox_username(roblox_id: str) -> str | None:
 
 async def get_roblox_account_age(roblox_id: str) -> str:
     url = f"https://users.roblox.com/v1/users/{roblox_id}"
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
         async with session.get(url) as resp:
             if resp.status != 200:
                 return 'Unknown'
@@ -225,7 +225,7 @@ async def get_roblox_account_age(roblox_id: str) -> str:
 
 async def get_roblox_previous_usernames(roblox_id: str) -> str:
     url = f"https://users.roblox.com/v1/users/{roblox_id}/username-history?limit=10"
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
         async with session.get(url) as resp:
             if resp.status != 200:
                 return 'Unknown'
@@ -236,7 +236,7 @@ async def get_roblox_previous_usernames(roblox_id: str) -> str:
 async def get_group_rank(roblox_id: str, group_id: str) -> str | None:
     """Returns the rank name of a user in a group, or None if not a member."""
     url = f"https://groups.roblox.com/v2/users/{roblox_id}/groups/roles"
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
         async with session.get(url) as resp:
             if resp.status != 200:
                 return None
@@ -260,7 +260,7 @@ async def set_group_rank(roblox_id: str, group_id: str, rank_name: str) -> bool:
     print(f"[ROBLOX] Fetching roles from: {roles_url}")
 
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
             async with session.get(roles_url, headers=ROBLOX_OC_HEADERS()) as resp:
                 print(f"[ROBLOX] Get roles status: {resp.status}")
                 if resp.status != 200:
@@ -294,7 +294,7 @@ async def set_group_rank(roblox_id: str, group_id: str, rank_name: str) -> bool:
     print(f"[ROBLOX] Fetching membership for user {roblox_id}")
 
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
             async with session.get(memberships_url, headers=ROBLOX_OC_HEADERS(), params=params) as resp:
                 print(f"[ROBLOX] Get membership status: {resp.status}")
                 body_text = await resp.text()
@@ -323,7 +323,7 @@ async def set_group_rank(roblox_id: str, group_id: str, rank_name: str) -> bool:
     print(f"[ROBLOX] Patching {patch_url} with role {role_path}")
 
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
             async with session.patch(patch_url, headers=ROBLOX_OC_HEADERS(), json=payload) as resp:
                 print(f"[ROBLOX] Set rank status: {resp.status}")
                 body = await resp.text()
@@ -534,7 +534,7 @@ async def accept_join_request(roblox_id: str, group_id: str) -> bool:
     list_url = f"https://apis.roblox.com/cloud/v2/groups/{group_id}/join-requests"
     request_path = None
 
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
         params = {'maxPageSize': 100}
         async with session.get(list_url, headers=ROBLOX_OC_HEADERS(), params=params) as resp:
             print(f"[ROBLOX] List join requests status: {resp.status}")
@@ -561,7 +561,7 @@ async def accept_join_request(roblox_id: str, group_id: str) -> bool:
 
     # Step 2: Accept the request using its path
     accept_url = f"https://apis.roblox.com/cloud/v2/{request_path}:accept"
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
         async with session.post(
             accept_url,
             headers=ROBLOX_OC_HEADERS(),
@@ -733,114 +733,122 @@ async def induct(interaction: discord.Interaction, users: str, company: str):
         return
 
     for discord_id in mentioned_ids:
-        member = interaction.guild.get_member(int(discord_id))
-        if not member:
-            try:
-                member = await interaction.guild.fetch_member(int(discord_id))
-            except Exception:
-                await interaction.followup.send(f"❌ Could not find Discord member <@{discord_id}>.")
+        lines = []
+        try:
+            member = interaction.guild.get_member(int(discord_id))
+            if not member:
+                try:
+                    member = await interaction.guild.fetch_member(int(discord_id))
+                except Exception:
+                    await interaction.followup.send(f"❌ Could not find Discord member <@{discord_id}>.")
+                    continue
+
+            roblox = await get_roblox_user(discord_id)
+
+            lines.append(f"**Induct Results**")
+            lines.append(f"<@{discord_id}>, {member.display_name}")
+
+            if not roblox:
+                lines.append("❌ Not verified with Bloxlink. Induction aborted.")
+                await interaction.followup.send('\n'.join(lines))
                 continue
 
-        roblox = await get_roblox_user(discord_id)
-        lines  = []
+            roblox_id       = roblox['roblox_id']
+            roblox_username = roblox['roblox_username']
 
-        lines.append(f"**Induct Results**")
-        lines.append(f"<@{discord_id}>, {member.display_name}")
+            current_rank = await get_group_rank(roblox_id, ROBLOX_GROUP_ID)
+            if not current_rank or current_rank.lower() in ('guest', ''):
+                lines.append("❌ Not in the Roblox group or pending. Run /accept first. Induction aborted.")
+                await interaction.followup.send('\n'.join(lines))
+                continue
 
-        # --- Roblox checks ---
-        if not roblox:
-            lines.append("❌ Not verified with Bloxlink. Induction aborted.")
-            await interaction.followup.send('\n'.join(lines))
-            continue
+            lines.append("✅ Accepted to Garde Impériale")
 
-        roblox_id = roblox['roblox_id']
-        roblox_username = roblox['roblox_username']
-
-        # Check group membership — must be at least Citoyen
-        current_rank = await get_group_rank(roblox_id, ROBLOX_GROUP_ID)
-        if not current_rank or current_rank.lower() in ('guest', ''):
-            lines.append("❌ Not in the Roblox group or pending. Run /accept first. Induction aborted.")
-            await interaction.followup.send('\n'.join(lines))
-            continue
-
-        lines.append("✅ Accepted to Garde Impériale")
-
-        # Set Roblox rank to Conscrit
-        if current_rank == 'Conscrit':
-            lines.append("⚠️ Is already ranked Conscrit. Skipping")
-        else:
-            ranked = await set_group_rank(roblox_id, ROBLOX_GROUP_ID, 'Conscrit')
-            if ranked:
-                lines.append("✅ Ranked to Conscrit.")
+            # Set Roblox rank
+            if current_rank.lower() == 'conscrit':
+                lines.append("⚠️ Is already ranked Conscrit. Skipping")
             else:
-                lines.append("❌ Failed to set Roblox rank to Conscrit.")
+                try:
+                    ranked = await asyncio.wait_for(
+                        set_group_rank(roblox_id, ROBLOX_GROUP_ID, 'Conscrit'),
+                        timeout=15
+                    )
+                    lines.append("✅ Ranked to Conscrit." if ranked else "❌ Failed to set Roblox rank.")
+                except asyncio.TimeoutError:
+                    lines.append("⚠️ Roblox rank request timed out.")
 
-        # --- Discord role changes ---
-        guild = interaction.guild
+            # Strip previous Discord roles
+            guild = interaction.guild
+            roles_to_remove = []
+            for rank_role_name in DISCORD_RANK_ROLES.values():
+                role = discord.utils.get(guild.roles, name=rank_role_name)
+                if role and role in member.roles:
+                    roles_to_remove.append(role)
+            for company_role_name in DISCORD_COMPANY_ROLES.values():
+                role = discord.utils.get(guild.roles, name=company_role_name)
+                if role and role in member.roles:
+                    roles_to_remove.append(role)
+            citoyen_discord = discord.utils.get(guild.roles, name='Citoyen')
+            if citoyen_discord and citoyen_discord in member.roles:
+                roles_to_remove.append(citoyen_discord)
+            if roles_to_remove:
+                await member.remove_roles(*roles_to_remove)
+                lines.append(f"✅ Stripped previous roles: {', '.join(r.name for r in roles_to_remove)}")
 
-        # Strip ALL existing rank and company roles first
-        roles_to_remove = []
-        for rank_role_name in DISCORD_RANK_ROLES.values():
-            role = discord.utils.get(guild.roles, name=rank_role_name)
-            if role and role in member.roles:
-                roles_to_remove.append(role)
-        for company_role_name in DISCORD_COMPANY_ROLES.values():
-            role = discord.utils.get(guild.roles, name=company_role_name)
-            if role and role in member.roles:
-                roles_to_remove.append(role)
+            # Add Conscrit role
+            conscrit_role = discord.utils.get(guild.roles, name=DISCORD_RANK_ROLES['Conscrit'])
+            if conscrit_role:
+                await member.add_roles(conscrit_role)
+                lines.append("✅ Added Conscrit role.")
+            else:
+                lines.append("❌ Conscrit Discord role not found.")
 
-        # Also strip Citoyen since they're being promoted past it
-        citoyen_discord = discord.utils.get(guild.roles, name='Citoyen')
-        if citoyen_discord and citoyen_discord in member.roles:
-            roles_to_remove.append(citoyen_discord)
+            # Add company role
+            company_role_name = DISCORD_COMPANY_ROLES.get(company)
+            company_role      = discord.utils.get(guild.roles, name=company_role_name)
+            if company_role:
+                await member.add_roles(company_role)
+                lines.append(f"✅ Added company role for {company}.")
+            else:
+                lines.append(f"❌ Company role '{company_role_name}' not found.")
 
-        if roles_to_remove:
-            await member.remove_roles(*roles_to_remove)
-            lines.append(f"✅ Stripped previous roles: {', '.join(r.name for r in roles_to_remove)}")
-        else:
-            lines.append("⚠️ No previous rank/company roles to strip")
+            # Add base roles
+            base_added = []
+            for role_name in BASE_ROLES:
+                role = discord.utils.get(guild.roles, name=role_name)
+                if role and role not in member.roles:
+                    await member.add_roles(role)
+                    base_added.append(role_name)
+            lines.append("✅ Added base roles." if base_added else "⚠️ Base roles already present.")
 
-        # Add Conscrit rank role
-        conscrit_role = discord.utils.get(guild.roles, name=DISCORD_RANK_ROLES['Conscrit'])
-        if conscrit_role:
-            await member.add_roles(conscrit_role)
-            lines.append("✅ Added Conscrit role.")
-        else:
-            lines.append("❌ Conscrit Discord role not found.")
+            # Remove Garde Nationale role
+            gn_role = discord.utils.get(guild.roles, name=GARDE_NATIONALE_ROLE)
+            if gn_role and gn_role in member.roles:
+                await member.remove_roles(gn_role)
+                lines.append("✅ Removed Garde Nationale role.")
+            else:
+                lines.append("⚠️ Garde Nationale role not present.")
 
-        # Add company role
-        company_role_name = DISCORD_COMPANY_ROLES.get(company)
-        company_role      = discord.utils.get(guild.roles, name=company_role_name)
-        if company_role:
-            await member.add_roles(company_role)
-            lines.append(f"✅ Added company role for {company}.")
-        else:
-            lines.append(f"❌ Company role '{company_role_name}' not found.")
+            # Update nickname
+            new_nick = f"[{company}] {roblox_username}"
+            try:
+                await member.edit(nick=new_nick)
+                lines.append(f"✅ Updated nickname to {new_nick}.")
+            except discord.Forbidden:
+                lines.append("⚠️ Could not update nickname (missing permissions).")
 
-        # Add base roles
-        base_added = []
-        for role_name in BASE_ROLES:
-            role = discord.utils.get(guild.roles, name=role_name)
-            if role and role not in member.roles:
-                await member.add_roles(role)
-                base_added.append(role_name)
-        lines.append("✅ Added base roles." if base_added else "⚠️ Base roles already present.")
+            bolt_log.info(f"[INDUCT] Inducted {roblox_username} into {company}")
 
-        # Remove Garde Nationale role
-        gn_role = discord.utils.get(guild.roles, name=GARDE_NATIONALE_ROLE)
-        if gn_role and gn_role in member.roles:
-            await member.remove_roles(gn_role)
-            lines.append("✅ Removed Garde Nationale role.")
-        else:
-            lines.append("⚠️ Garde Nationale role not present.")
+        except Exception as e:
+            # Catch-all — guarantees the interaction always gets a response
+            lines.append(f"❌ Unexpected error during induction: {type(e).__name__}: {e}")
+            bolt_log.error(f"[INDUCT] Unexpected error for {discord_id}: {type(e).__name__}: {e}")
+            print(f"[INDUCT] Unexpected error for {discord_id}: {type(e).__name__}: {e}")
 
-        # Update nickname
-        new_nick = f"[{company}] {roblox_username}"
-        try:
-            await member.edit(nick=new_nick)
-            lines.append(f"✅ Updated nickname to {new_nick}.")
-        except discord.Forbidden:
-            lines.append("⚠️ Could not update nickname (missing permissions).")
+        finally:
+            # This ALWAYS runs — guarantees Discord clears the "thinking" state
+            if lines:
+                await interaction.followup.send('\n'.join(lines))
 
 
 #  /draft
@@ -919,7 +927,14 @@ async def draft(interaction: discord.Interaction, users: str, new_company: str):
             lines.append("❌ Conscrit role not found in Discord.")
 
         # Reset Roblox rank to Conscrit
-        ranked = await set_group_rank(roblox_id, ROBLOX_GROUP_ID, 'Conscrit')
+        try:
+            ranked = await asyncio.wait_for(
+                set_group_rank(roblox_id, ROBLOX_GROUP_ID, 'Conscrit'),
+                timeout=15
+            )
+        except asyncio.TimeoutError:
+            ranked = False
+            lines.append("⚠️ Roblox rank request timed out.")
         lines.append("✅ Roblox rank reset to Conscrit." if ranked else "❌ Failed to reset Roblox rank.")
 
         # Update nickname
