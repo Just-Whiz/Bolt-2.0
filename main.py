@@ -372,9 +372,17 @@ async def on_ready():
     print(f'[BOT] Logged in as {bot.user.name} - {bot.user.id}')
     bolt_log.info(f"[BOT] Logged in as {bot.user.name} - {bot.user.id}")
     try:
-        synced = await bot.tree.sync()
-        print(f"[BOT] Synced {len(synced)} slash command(s).")
-        bolt_log.info(f"[BOT] Synced {len(synced)} slash command(s).")
+        guild = discord.Object(id=int(GUILD_ID))
+
+        # ONE-TIME CLEANUP — remove after running once
+        #bot.tree.clear_commands(guild=None)       # clears global commands
+        #await bot.tree.sync()                     # pushes the empty list globally
+        # END CLEANUP
+
+        bot.tree.copy_global_to(guild=guild)
+        synced = await bot.tree.sync(guild=guild)
+        print(f"[BOT] Synced {len(synced)} slash command(s) to guild.")
+        bolt_log.info(f"[BOT] Synced {len(synced)} slash command(s) to guild.")
     except Exception as e:
         print(f"[BOT] Sync error: {e}")
         bolt_log.error(f"[BOT] Sync error: {e}")
