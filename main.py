@@ -17,17 +17,23 @@ from datetime import timezone, datetime
 
 load_dotenv()
 
-token            = os.getenv("DISCORD_TOKEN")
+token = os.getenv("DISCORD_TOKEN")
 BLOXLINK_API_KEY = os.getenv("BLOXLINK_API_KEY")
-GUILD_ID         = os.getenv("GUILD_ID")
+GUILD_ID = os.getenv("GUILD_ID")
+ROBLOX_OPEN_CLOUD = os.getenv("ROBLOX_OPEN_CLOUD_KEY")
+ROBLOX_OC_HEADERS = lambda: {
+    "x-api-key": ROBLOX_OPEN_CLOUD,
+    "Content-Type": "application/json"
+}
 
 # The two groups we specifically surface at the top of every check
 FRENCH_MAIN_GROUP_ID = "5610765"
-CAV_GROUP_ID         = "195387641"
+CAV_GROUP_ID = "195387641"
 
-VERIFIED_USERS_PATH   = "verified_users.json"
-AIOHTTP_TIMEOUT       = aiohttp.ClientTimeout(total=10)
+VERIFIED_USERS_PATH = "verified_users.json"
+AIOHTTP_TIMEOUT = aiohttp.ClientTimeout(total=10)
 RECRUITMENT_ROLE_NAME = "Recruitment Team"
+
 
 # ─────────────────────────────────────────────
 #  GROUP ID → DISPLAY NAME MAPS
@@ -35,116 +41,122 @@ RECRUITMENT_ROLE_NAME = "Recruitment Team"
 #  Anything else is silently ignored.
 # ─────────────────────────────────────────────
 
+ROLE_BRIGADE_KELLERMAN
+ROLE_26EME
+
+ROLE_CONSCRIT
+
+
 FRENCH_GROUP_IDS = {
     # ── France ──────────────────────────────
-    "5610765":   "Empire Français",
-    "6057395":   "Garde Impériale",
-    "6057318":   "Premier Corps",
-    "6057327":   "Deuxième Corps",
-    "6057333":   "Troisième Corps",
-    "7840844":   "Quatrième Corps",
-    "9976984":   "Cinquième Corps",
-    "13206132":  "Neuvième Corps",
-    "13284835":  "État-Major Impériale",
+    "5610765": "Empire Français",
+    "6057395": "Garde Impériale",
+    "6057318": "Premier Corps",
+    "6057327": "Deuxième Corps",
+    "6057333": "Troisième Corps",
+    "7840844": "Quatrième Corps",
+    "9976984": "Cinquième Corps",
+    "13206132":"Neuvième Corps",
+    "13284835": "État-Major Impériale",
     "195387641": "Corps de Cavalerie Impériale",
     # ── Naples ──────────────────────────────
-    "6764583":   "Esercito Napoletano",
-    "7135170":   "Regno di Napoli",
-    "9746123":   "Prima Divisione",
-    "10514799":  "Seconda Divisione",
-    "32627531":  "Terza Divisione",
+    "6764583": "Esercito Napoletano",
+    "7135170": "Regno di Napoli",
+    "9746123": "Prima Divisione",
+    "10514799": "Seconda Divisione",
+    "32627531": "Terza Divisione",
     "1112910179":"Quatra Divisione",
-    "9067214":   "Marina Napoletana",
-    "10349483":  "Guardia Reale",
-    "33741408":  "Corpo d'Armata",
+    "9067214": "Marina Napoletana",
+    "10349483": "Guardia Reale",
+    "33741408": "Corpo d'Armata",
     "477750899": "Reggimento d'Artiglieria di Marina",
     # ── Warsaw / Poland ─────────────────────
-    "4614276":   "Woysko Xięstwa Warszawskiego",
+    "4614276": "Woysko Xięstwa Warszawskiego",
     "394072781": "Sztab Generalny Woyska Polskiego",
     "796097059": "Brygada Gwardii Narodowej",
     "596867575": "Xięstwo Litewskie",
-    "9921948":   "Pierwsza Dywizya",
-    "33709393":  "Drugi Dywizja",
-    "9921939":   "Korpus Kawalerii",
+    "9921948": "Pierwsza Dywizya",
+    "33709393": "Drugi Dywizja",
+    "9921939": "Korpus Kawalerii",
 }
 
 COALITION_GROUP_IDS = {
     # ── Austria ─────────────────────────────
-    "16702357":  "Kaisertum Österreich",
-    "17034669":  "Grenadier Korps",
-    "16965984":  "Königliche Ungarn",
-    "33606731":  "Hof von Österreich",
-    "14706502":  "Erste Korps",
-    "17248191":  "Zweite Korps",
-    "33437234":  "Drittes Korps",
-    "33727999":  "Viertes Korps",
-    "35915613":  "Fünftes Korps",
-    "856818677": "Fünftes Korps Recruitment",
-    "33129015":  "Kavallerie Korps",
-    "33679754":  "Ingenieur Korps",
-    "35755856":  "Küchenbrigade",
+    "16702357": "Kaisertum Österreich",
+    "17034669": "Grenadier Korps",
+    "16965984": "Königliche Ungarn",
+    "33606731": "Hof von Österreich",
+    "14706502": "Erste Korps",
+    "17248191": "Zweite Korps",
+    "33437234": "Drittes Korps",
+    "33727999": "Viertes Korps",
+    "35915613": "Fünftes Korps",
+    "856818677":"Fünftes Korps Recruitment",
+    "33129015": "Kavallerie Korps",
+    "33679754": "Ingenieur Korps",
+    "35755856": "Küchenbrigade",
     # ── Russia ──────────────────────────────
-    "7528791":   "Imperatorskaya Armiya",
-    "10621031":  "Imperskoy Gvardii Korpus",
-    "34279561":  "Grenaderskiy Korpus",
-    "34279574":  "Severnaya Armiya",
-    "32842545":  "Yuzhnaya Armiya",
-    "8254296":   "Zapadnaya Armiya",
+    "7528791": "Imperatorskaya Armiya",
+    "10621031": "Imperskoy Gvardii Korpus",
+    "34279561": "Grenaderskiy Korpus",
+    "34279574": "Severnaya Armiya",
+    "32842545": "Yuzhnaya Armiya",
+    "8254296": "Zapadnaya Armiya",
     "950745879": "Krymskaya Armiya",
-    "35917740":  "Vostochnaya Armiya",
+    "35917740": "Vostochnaya Armiya",
     # ── Britain ─────────────────────────────
-    "4000196":   "British Army",
-    "9686866":   "First Division",
-    "9686840":   "Fifth Brigade",
-    "12691944":  "Second Division",
-    "35746582":  "Board of Ordnance (INVICTORS)",
-    "32033796":  "Braunschweig-Oels-Linien-Bataillon",
-    "35746578":  "Board of Ordnance (PRINCIPES)",
-    "34209218":  "Schweizer Adelsgeschlecht",
-    "7907149":   "Household Brigade",
+    "4000196": "British Army",
+    "9686866": "First Division",
+    "9686840": "Fifth Brigade",
+    "12691944": "Second Division",
+    "35746582": "Board of Ordnance (INVICTORS)",
+    "32033796": "Braunschweig-Oels-Linien-Bataillon",
+    "35746578": "Board of Ordnance (PRINCIPES)",
+    "34209218": "Schweizer Adelsgeschlecht",
+    "7907149": "Household Brigade",
     "1049512588":"Foot Guards Grenadiers",
     # ── Prussia ─────────────────────────────
-    "35965347":  "Preußische Armee",
-    "35986490":  "Königliches Gardekorps",
-    "35986478":  "Erstes Armeekorps",
+    "35965347": "Preußische Armee",
+    "35986490": "Königliches Gardekorps",
+    "35986478": "Erstes Armeekorps",
     # ── Spain ───────────────────────────────
-    "11639829":  "Ejército de España",
+    "11639829": "Ejército de España",
     "223078637": "Ejército Real de Nueva España",
-    "32374377":  "Ejército de Aragón",
-    "34056502":  "Ejército de Galicia",
+    "32374377": "Ejército de Aragón",
+    "34056502": "Ejército de Galicia",
     # ── Andour ──────────────────────────────
-    "5531725":   "Andouran Empire",
+    "5531725": "Andouran Empire",
     "432773563": "Fuirst Keisariks Armcorps",
-    "17375317":  "Anders Keisariks Armcorps",
-    "35333449":  "Keisariks Armcorps Grenader",
-    "16125179":  "Andouran Imperial Guard",
-    "8559975":   "Kait",
-    "8410719":   "Order of the Gold Griffin",
-    "35504152":  "Kurohana",
-    "6331920":   "Order of the White Tiger",
+    "17375317": "Anders Keisariks Armcorps",
+    "35333449": "Keisariks Armcorps Grenader",
+    "16125179": "Andouran Imperial Guard",
+    "8559975": "Kait",
+    "8410719": "Order of the Gold Griffin",
+    "35504152": "Kurohana",
+    "6331920": "Order of the White Tiger",
     # ── Portugal ────────────────────────────
-    "34011906":  "Exército de Portugal",
-    "11392538":  "Real Armada Portuguesa",
-    "34460157":  "Brigada Real da Marinha",
-    "35181462":  "Corpo Real de Cavalaria",
-    "35613090":  "Guarda Real da Polícia de Lisboa",
+    "34011906": "Exército de Portugal",
+    "11392538": "Real Armada Portuguesa",
+    "34460157": "Brigada Real da Marinha",
+    "35181462": "Corpo Real de Cavalaria",
+    "35613090": "Guarda Real da Polícia de Lisboa",
     "35001756":  "Corte Real Portuguesa",
 }
 
 NEUTRAL_GROUP_IDS = {
     # ── United States ────────────────────────
-    "5826061":   "United States Army",
-    "10822431":  "US Marine Corps",
+    "5826061": "United States Army",
+    "10822431": "US Marine Corps",
     "175161616": "General Society of the War of 1812",
-    "61813207":  "U.S. Artillery Corps",
-    "35683824":  "U.S. Ranger Regiment",
-    "35281366":  "United States Cavalry Detachment",
-    "17394192":  "Brown's First Brigade",
-    "33704866":  "Ripley's 2nd Brigade",
+    "61813207": "U.S. Artillery Corps",
+    "35683824": "U.S. Ranger Regiment",
+    "35281366": "United States Cavalry Detachment",
+    "17394192": "Brown's First Brigade",
+    "33704866": "Ripley's 2nd Brigade",
     # ── Ottomans ────────────────────────────
-    "32950259":  "Devlet-i Aliyye-i Osmâniyye",
-    "36056277":  "Kapıkulu Ocağı",
-    "17018827":  "Nizâm-ı Cedîd Ordu",
+    "32950259": "Devlet-i Aliyye-i Osmâniyye",
+    "36056277": "Kapıkulu Ocağı",
+    "17018827": "Nizâm-ı Cedîd Ordu",
 }
 
 # Combined set for fast membership lookup
@@ -195,9 +207,9 @@ def get_cached_roblox(discord_id: str) -> dict | None:
 def cache_roblox_user(discord_id: str, roblox_id: str, roblox_username: str):
     users = load_verified_users()
     users[str(discord_id)] = {
-        'roblox_id':       roblox_id,
+        'roblox_id': roblox_id,
         'roblox_username': roblox_username,
-        'cached_at':       datetime.now(timezone.utc).isoformat()
+        'cached_at': datetime.now(timezone.utc).isoformat()
     }
     with open(VERIFIED_USERS_PATH, 'w') as f:
         json.dump(users, f, indent=2)
@@ -217,7 +229,7 @@ async def get_roblox_user(discord_id: str) -> dict | None:
         bolt_log.error("[BLOXLINK] No API key configured.")
         return None
 
-    url     = f"https://api.blox.link/v4/public/guilds/{GUILD_ID}/discord-to-roblox/{discord_id}"
+    url = f"https://api.blox.link/v4/public/guilds/{GUILD_ID}/discord-to-roblox/{discord_id}"
     headers = {'Authorization': BLOXLINK_API_KEY}
     print(f"[BLOXLINK] Calling: {url}")
 
@@ -266,15 +278,15 @@ async def get_roblox_account_age(roblox_id: str) -> str:
             ) as resp:
                 if resp.status != 200:
                     return 'Unknown'
-                data    = await resp.json()
+                data = await resp.json()
                 created = data.get('created', '')
                 if not created:
                     return 'Unknown'
                 created_dt = datetime.fromisoformat(created.replace('Z', '+00:00'))
-                delta      = datetime.now(timezone.utc) - created_dt
-                years      = delta.days // 365
-                months     = (delta.days % 365) // 30
-                days       = delta.days % 30
+                delta = datetime.now(timezone.utc) - created_dt
+                years = delta.days // 365
+                months = (delta.days % 365) // 30
+                days = delta.days % 30
                 return f"{years} years, {months} months, {days} days"
     except Exception:
         return 'Unknown'
@@ -287,7 +299,7 @@ async def get_roblox_previous_usernames(roblox_id: str) -> str:
             ) as resp:
                 if resp.status != 200:
                     return 'None'
-                data  = await resp.json()
+                data = await resp.json()
                 names = [e['name'] for e in data.get('data', [])]
                 return ', '.join(names) if names else 'None'
     except Exception:
@@ -348,7 +360,7 @@ def format_field(lines: list[str]) -> str:
     return text[:1020] + '\n...' if len(text) > 1020 else text
 
 # ─────────────────────────────────────────────
-#  PERMISSION CHECK
+#  ROLE/PERMISSION CHECK
 # ─────────────────────────────────────────────
 
 def has_recruitment_role(interaction: discord.Interaction) -> bool:
@@ -434,14 +446,14 @@ async def background_check(interaction: discord.Interaction, users: str):
                 return_exceptions=True
             )
             if isinstance(account_age, Exception): account_age = 'Unknown'
-            if isinstance(prev_names,  Exception): prev_names  = 'None'
-            if isinstance(all_groups,  Exception): all_groups  = []
+            if isinstance(prev_names, Exception): prev_names = 'None'
+            if isinstance(all_groups, Exception): all_groups = []
 
             groups = all_groups if isinstance(all_groups, list) else []
 
             # ── Specific group status ──────────────────
             french_rank = 'Not a member'
-            cav_rank    = 'Not a member'
+            cav_rank = 'Not a member'
             for g in groups:
                 if g['id'] == FRENCH_MAIN_GROUP_ID:
                     french_rank = g['rank']
@@ -453,7 +465,7 @@ async def background_check(interaction: discord.Interaction, users: str):
 
             # ── Build embed ────────────────────────────
             discord_display = f"<@{discord_id}>" if member else f"Unknown ({discord_id})"
-            discord_nick    = (member.nick or member.name) if member else roblox_username
+            discord_nick = (member.nick or member.name) if member else roblox_username
 
             embed = discord.Embed(
                 title="Background Check Results",
@@ -461,25 +473,18 @@ async def background_check(interaction: discord.Interaction, users: str):
             )
 
             # Identity
-            embed.add_field(name="Discord",
-                            value=discord_display, inline=True)
-            embed.add_field(name="Nickname",
-                            value=discord_nick,    inline=True)
-            embed.add_field(name="Roblox Username",
-                            value=roblox_username, inline=True)
+            embed.add_field(name="Discord", value=discord_display, inline=True)
+            embed.add_field(name="Nickname", value=discord_nick, inline=True)
+            embed.add_field(name="Roblox Username", value=roblox_username, inline=True)
 
             # Account info
-            embed.add_field(name="Account Age",
-                            value=account_age,  inline=True)
-            embed.add_field(name="Previous Usernames",
-                            value=prev_names,   inline=True)
+            embed.add_field(name="Account Age", value=account_age,  inline=True)
+            embed.add_field(name="Previous Usernames", value=prev_names, inline=True)
 
             # Key group ranks (always shown)
             embed.add_field(name="\u200b", value="\u200b", inline=False)  # spacer
-            embed.add_field(name="Empire Français Rank",
-                            value=french_rank, inline=True)
-            embed.add_field(name="Corps de Cavalerie Rank",
-                            value=cav_rank,    inline=True)
+            embed.add_field(name="Empire Français Rank", value=french_rank, inline=True)
+            embed.add_field(name="Corps de Cavalerie Rank", value=cav_rank,    inline=True)
 
             # Nation memberships
             embed.add_field(name="\u200b", value="\u200b", inline=False)  # spacer
@@ -504,7 +509,7 @@ async def background_check(interaction: discord.Interaction, users: str):
             await interaction.followup.send(embed=embed)
             bolt_log.info(
                 f"[BG CHECK] {roblox_username} ({roblox_id}) "
-                f"checked by {interaction.user} — "
+                f"checked by {interaction.user} - "
                 f"F:{len(french)} C:{len(coalition)} N:{len(neutral)}"
             )
 
@@ -514,6 +519,12 @@ async def background_check(interaction: discord.Interaction, users: str):
             )
             bolt_log.error(f"[BG CHECK] Error for {discord_id}: {e}")
             print(f"[BG CHECK] Error: {e}")
+
+# ─────────────────────────────────────────────
+#  /induct
+# ─────────────────────────────────────────────
+
+
 
 # ─────────────────────────────────────────────
 #  RUN
