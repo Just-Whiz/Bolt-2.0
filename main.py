@@ -27,8 +27,8 @@ ROBLOX_OC_HEADERS = lambda: {
 }
 
 # The two groups we specifically surface at the top of every check
-FRENCH_MAIN_GROUP_ID = "5610765"
-CAV_GROUP_ID = "195387641"
+FRENCH_MAIN_GROUP_ID = os.getenv("FRENCH_GROUP_ID")
+CAV_GROUP_ID = os.getenv("CAV_GROUP_ID")
 
 VERIFIED_USERS_PATH = "verified_users.json"
 AIOHTTP_TIMEOUT = aiohttp.ClientTimeout(total=10)
@@ -41,10 +41,10 @@ RECRUITMENT_ROLE_NAME = "Recruitment Team"
 #  Anything else is silently ignored.
 # ─────────────────────────────────────────────
 
-ROLE_BRIGADE_KELLERMAN
-ROLE_26EME
+#ROLE_BRIGADE_KELLERMAN
+#ROLE_26EME
 
-ROLE_CONSCRIT
+#ROLE_CONSCRIT
 
 
 FRENCH_GROUP_IDS = {
@@ -166,7 +166,7 @@ ALL_KNOWN_IDS = set(FRENCH_GROUP_IDS) | set(COALITION_GROUP_IDS) | set(NEUTRAL_G
 #  LOGGING
 # ─────────────────────────────────────────────
 
-LOG_FILE     = "bolt.log"
+LOG_FILE = "bolt.log"
 file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8", mode="a")
 file_handler.setFormatter(logging.Formatter(
     fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -305,6 +305,7 @@ async def get_roblox_previous_usernames(roblox_id: str) -> str:
     except Exception:
         return 'None'
 
+# This specific async function returns the all the groups & the ranks that the user is in (for validating that a potential recruit has left all valid groups)
 async def get_all_group_ranks(roblox_id: str) -> list[dict]:
     """Returns all Roblox groups the user is in."""
     try:
@@ -318,13 +319,48 @@ async def get_all_group_ranks(roblox_id: str) -> list[dict]:
                 return [
                     {
                         'name': e['group']['name'],
-                        'id':   str(e['group']['id']),
+                        'id': str(e['group']['id']),
                         'rank': e['role']['name']
                     }
                     for e in data.get('data', [])
                 ]
     except Exception:
         return []
+    
+# This function is different than the one above; it insteads checks to see if a user is in a SPECIFIC group rather than checking all groups (for auto-accepting users into the Roblox Group)
+async def get_group_rank(roblox_id: str, group_id: str) -> str | None:
+    """Returns rank name of a user in a specific group, or None if not a member."""
+    try:
+        async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
+            async with session.get(
+                f"https://groups.roblox.com/v2/users/{roblox_id}/groups/roles"
+            ) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.json()
+                for entry in data.get('data', []):
+                    if str(entry['group']['id']) == str(group_id):
+                        return entry['role']['name']
+        return None
+    except Exception:
+        return None
+    
+async def get_roblox_avatar_url(roblox_id: str) -> str | None:
+    """Returns a headshot thumbnail URL for a Roblox user."""
+    try:
+        async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
+            async with session.get(
+                f"https://thumbnails.roblox.com/v1/users/avatar-headshot"
+                f"?userIds={roblox_id}&size=150x150&format=Png&isCircular=false"
+            ) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.json()
+                entries = data.get('data', [])
+                if entries:
+                    return entries[0].get('imageUrl')
+    except Exception:
+        return None
 
 # ─────────────────────────────────────────────
 #  CATEGORISATION
@@ -335,12 +371,12 @@ def categorise_groups(all_groups: list[dict]) -> tuple[list, list, list]:
     Returns (french_lines, coalition_lines, neutral_lines).
     Groups not in any known map are silently dropped.
     """
-    french    = []
+    french = []
     coalition = []
-    neutral   = []
+    neutral = []
 
     for g in all_groups:
-        gid  = g['id']
+        gid = g['id']
         rank = g['rank']
 
         if gid in FRENCH_GROUP_IDS:
@@ -358,6 +394,129 @@ def format_field(lines: list[str]) -> str:
         return 'None'
     text = '\n'.join(lines)
     return text[:1020] + '\n...' if len(text) > 1020 else text
+
+# ─────────────────────────────────────────────
+#  Accept join request w/ Roblox Open Cloud API
+# ─────────────────────────────────────────────
+
+async def accept_join_request(roblox_id: str, group_id: str) -> bool:
+    """Lists pending join requests and accepts the one matching roblox_id."""
+    if not ROBLOX_OPEN_CLOUD:
+        print("[ROBLOX] No Open Cloud key configured.")
+        return False
+    try:
+        async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
+            async with session.get(
+                f"https://apis.roblox.com/cloud/v2/groups/{group_id}/join-requests",
+                headers=ROBLOX_OC_HEADERS(),
+                params={'maxPageSize': 100}
+            ) as resp:
+                if resp.status != 200:
+                    print(f"[ROBLOX] List join requests failed: {resp.status}")
+                    return False
+                data = await resp.json()
+    except Exception as e:
+        print(f"[ROBLOX] Exception listing join requests: {e}")
+        return False
+
+    request_path = None
+    for request in data.get('groupJoinRequests', []):
+        if str(roblox_id) in request.get('user', ''):
+            request_path = request.get('path')
+            break
+
+    if not request_path:
+        print(f"[ROBLOX] No pending join request for {roblox_id}")
+        return False
+
+    try:
+        async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
+            async with session.post(
+                f"https://apis.roblox.com/cloud/v2/{request_path}:accept",
+                headers=ROBLOX_OC_HEADERS(),
+                json={}
+            ) as resp:
+                print(f"[ROBLOX] Accept status: {resp.status}")
+                return resp.status in (200, 204)
+    except Exception as e:
+        print(f"[ROBLOX] Exception accepting join request: {e}")
+        return False
+
+# ─────────────────────────────────────────────
+#  Set Rank in Roblox Group w/ Open Cloud API
+# ─────────────────────────────────────────────
+
+async def set_group_rank(roblox_id: str, group_id: str, rank_name: str) -> bool:
+    """Sets a user's rank in a Roblox group by rank name using Open Cloud."""
+    print(f"[ROBLOX] set_group_rank: user={roblox_id}, group={group_id}, rank={rank_name}")
+    if not ROBLOX_OPEN_CLOUD:
+        print("[ROBLOX] No Open Cloud key configured.")
+        return False
+
+    # Step 1: get role path
+    try:
+        async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
+            async with session.get(
+                f"https://apis.roblox.com/cloud/v2/groups/{group_id}/roles",
+                headers=ROBLOX_OC_HEADERS()
+            ) as resp:
+                if resp.status != 200:
+                    print(f"[ROBLOX] Get roles failed: {resp.status}")
+                    return False
+                roles_data = await resp.json()
+    except Exception as e:
+        print(f"[ROBLOX] Exception getting roles: {e}")
+        return False
+
+    role_path = None
+    for role in roles_data.get('groupRoles', []):
+        if role.get('displayName', '').strip().lower() == rank_name.strip().lower():
+            role_path = role.get('path')
+            break
+
+    if not role_path:
+        print(f"[ROBLOX] Rank '{rank_name}' not found in group {group_id}")
+        return False
+
+    # Step 2: get membership path
+    try:
+        async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
+            async with session.get(
+                f"https://apis.roblox.com/cloud/v2/groups/{group_id}/memberships",
+                headers=ROBLOX_OC_HEADERS(),
+                params={'filter': f"user == 'users/{roblox_id}'"}
+            ) as resp:
+                if resp.status != 200:
+                    print(f"[ROBLOX] Get membership failed: {resp.status}")
+                    return False
+                membership_data = await resp.json()
+    except Exception as e:
+        print(f"[ROBLOX] Exception getting membership: {e}")
+        return False
+
+    memberships = membership_data.get('groupMemberships', [])
+    if not memberships:
+        print(f"[ROBLOX] No membership found for {roblox_id}")
+        return False
+
+    membership_path = memberships[0].get('path')
+
+    # Step 3: PATCH
+    try:
+        async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
+            async with session.patch(
+                f"https://apis.roblox.com/cloud/v2/{membership_path}",
+                headers=ROBLOX_OC_HEADERS(),
+                json={'role': role_path}
+            ) as resp:
+                print(f"[ROBLOX] Set rank status: {resp.status} — {await resp.text()}")
+                success = resp.status in (200, 204)
+                if success:
+                    bolt_log.info(f"[ROBLOX] Set {roblox_id} → {rank_name} in {group_id}")
+                return success
+    except Exception as e:
+        print(f"[ROBLOX] Exception setting rank: {e}")
+        return False
 
 # ─────────────────────────────────────────────
 #  ROLE/PERMISSION CHECK
@@ -443,11 +602,13 @@ async def background_check(interaction: discord.Interaction, users: str):
                 get_roblox_account_age(roblox_id),
                 get_roblox_previous_usernames(roblox_id),
                 get_all_group_ranks(roblox_id),
+                get_roblox_avatar_url(roblox_id),
                 return_exceptions=True
             )
             if isinstance(account_age, Exception): account_age = 'Unknown'
             if isinstance(prev_names, Exception): prev_names = 'None'
             if isinstance(all_groups, Exception): all_groups = []
+            if isinstance(avatar_url, Exception): avatar_url = None
 
             groups = all_groups if isinstance(all_groups, list) else []
 
@@ -472,7 +633,9 @@ async def background_check(interaction: discord.Interaction, users: str):
                 color=discord.Color.dark_blue()
             )
 
-            # Identity
+            #Identity
+            if avatar_url:
+                embed.set_thumbnail(url=avatar_url)
             embed.add_field(name="Discord", value=discord_display, inline=True)
             embed.add_field(name="Nickname", value=discord_nick, inline=True)
             embed.add_field(name="Roblox Username", value=roblox_username, inline=True)
@@ -524,7 +687,146 @@ async def background_check(interaction: discord.Interaction, users: str):
 #  /induct
 # ─────────────────────────────────────────────
 
+INDUCT_ROLES    = ['BRIGADE KELLERMAN', '26ème Regiment des Chasseurs a Cheval']
+BASE_ROLES      = ['Verified', 'Member']
+REMOVE_ON_INDUCT = ['Garde Nationale', 'Citoyen']
+CAV_INDUCT_RANK = 'BRIGADE KELLERMAN'   # exact Roblox rank name in the Cav group
 
+@bot.tree.command(name="induct", description="Induct one or more recruits into the regiment.")
+@app_commands.describe(users="Mention one or more users to induct")
+async def induct(interaction: discord.Interaction, users: str):
+
+    if not has_recruitment_role(interaction):
+        await interaction.response.send_message(
+            f"❌ You need the **{RECRUITMENT_ROLE_NAME}** role to use this command.",
+            ephemeral=True
+        )
+        return
+
+    await interaction.response.defer()
+
+    mentioned_ids = MENTION_PATTERN.findall(users)
+    if not mentioned_ids:
+        await interaction.followup.send("Please mention at least one user.")
+        return
+
+    for discord_id in mentioned_ids:
+        lines = ["**Induct Results**"]
+
+        try:
+            # ── Resolve Discord member ─────────────────
+            member = interaction.guild.get_member(int(discord_id))
+            if not member:
+                member = await asyncio.wait_for(
+                    interaction.guild.fetch_member(int(discord_id)), timeout=10
+                )
+            lines.append(f"<@{discord_id}> — {member.display_name}")
+
+            # ── Bloxlink lookup ────────────────────────
+            roblox = await asyncio.wait_for(get_roblox_user(discord_id), timeout=10)
+            if not roblox:
+                lines.append("❌ Not verified with Bloxlink. Aborted.")
+                await interaction.followup.send('\n'.join(lines))
+                continue
+
+            roblox_id       = roblox['roblox_id']
+            roblox_username = roblox['roblox_username']
+
+            # ── Cav group: accept if pending, then rank ─
+            cav_rank = await asyncio.wait_for(
+                get_group_rank(roblox_id, CAV_GROUP_ID), timeout=10
+            )
+
+            if not cav_rank or cav_rank.lower() == 'guest':
+                # Not in group yet — try to accept a pending join request
+                accepted = await asyncio.wait_for(
+                    accept_join_request(roblox_id, CAV_GROUP_ID), timeout=15
+                )
+                if accepted:
+                    lines.append("✅ Accepted into Corps de Cavalerie Impériale.")
+                else:
+                    lines.append(
+                        "❌ Not in Cav group and no pending join request found. "
+                        "Ask them to send a join request first. Aborted."
+                    )
+                    await interaction.followup.send('\n'.join(lines))
+                    continue
+            else:
+                lines.append(f"⚠️ Already in Cav group as {cav_rank}.")
+
+            # ── Set Cav rank → BRIGADE KELLERMAN ───────
+            if cav_rank and cav_rank.lower() == CAV_INDUCT_RANK.lower():
+                lines.append(f"⚠️ Already ranked {CAV_INDUCT_RANK} in Roblox. Skipping.")
+            else:
+                try:
+                    ranked = await asyncio.wait_for(
+                        set_group_rank(roblox_id, CAV_GROUP_ID, CAV_INDUCT_RANK),
+                        timeout=15
+                    )
+                    lines.append(
+                        f"✅ Ranked to {CAV_INDUCT_RANK} in Corps de Cavalerie."
+                        if ranked else
+                        "❌ Failed to set Roblox rank. Set manually."
+                    )
+                except asyncio.TimeoutError:
+                    lines.append("⚠️ Roblox rank request timed out.")
+
+            guild = interaction.guild
+
+            # ── Strip old roles ────────────────────────
+            stripped = []
+            for rn in REMOVE_ON_INDUCT:
+                r = discord.utils.get(guild.roles, name=rn)
+                if r and r in member.roles:
+                    await member.remove_roles(r)
+                    stripped.append(rn)
+            lines.append(
+                f"✅ Stripped: {', '.join(stripped)}"
+                if stripped else "⚠️ No roles to strip."
+            )
+
+            # ── Add regiment roles ─────────────────────
+            added = []
+            for rn in INDUCT_ROLES:
+                r = discord.utils.get(guild.roles, name=rn)
+                if r:
+                    if r not in member.roles:
+                        await member.add_roles(r)
+                    added.append(rn)
+                else:
+                    lines.append(f"❌ Role not found in Discord: '{rn}'")
+            if added:
+                lines.append(f"✅ Added: {', '.join(added)}")
+
+            # ── Add base roles ─────────────────────────
+            base_added = []
+            for rn in BASE_ROLES:
+                r = discord.utils.get(guild.roles, name=rn)
+                if r and r not in member.roles:
+                    await member.add_roles(r)
+                    base_added.append(rn)
+            if base_added:
+                lines.append(f"✅ Added base roles: {', '.join(base_added)}")
+
+            # ── Update nickname ────────────────────────
+            new_nick = f"[BK] {roblox_username}"
+            try:
+                await member.edit(nick=new_nick)
+                lines.append(f"✅ Nickname set to {new_nick}.")
+            except discord.Forbidden:
+                lines.append("⚠️ Could not update nickname (missing permissions).")
+
+            bolt_log.info(f"[INDUCT] {roblox_username} inducted by {interaction.user}")
+
+        except asyncio.TimeoutError:
+            lines.append("❌ A request timed out.")
+            bolt_log.error(f"[INDUCT] Timeout for {discord_id}")
+        except Exception as e:
+            lines.append(f"❌ Unexpected error: {type(e).__name__}: {e}")
+            bolt_log.error(f"[INDUCT] Error for {discord_id}: {e}")
+            print(f"[INDUCT] Error: {e}")
+
+        await interaction.followup.send('\n'.join(lines))
 
 # ─────────────────────────────────────────────
 #  RUN
