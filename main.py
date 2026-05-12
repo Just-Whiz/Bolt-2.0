@@ -41,12 +41,6 @@ RECRUITMENT_ROLE_NAME = "Recruitment Team"
 #  Anything else is silently ignored.
 # ─────────────────────────────────────────────
 
-#ROLE_BRIGADE_KELLERMAN
-#ROLE_26EME
-
-#ROLE_CONSCRIT
-
-
 FRENCH_GROUP_IDS = {
     # ── France ──────────────────────────────
     "5610765": "Empire Français",
@@ -447,75 +441,88 @@ async def accept_join_request(roblox_id: str, group_id: str) -> bool:
 # ─────────────────────────────────────────────
 
 async def set_group_rank(roblox_id: str, group_id: str, rank_name: str) -> bool:
-    """Sets a user's rank in a Roblox group by rank name using Open Cloud."""
-    print(f"[ROBLOX] set_group_rank: user={roblox_id}, group={group_id}, rank={rank_name}")
+    """
+    Sets a Roblox user's role in a group using Open Cloud.
+    Reusable for inductions, promotions, demotions, etc.
+    """
+
+    print(f"[ROBLOX] Ranking {roblox_id} -> {rank_name} in {group_id}")
     if not ROBLOX_OPEN_CLOUD:
         print("[ROBLOX] No Open Cloud key configured.")
         return False
-
-    # Step 1: get role path
     try:
         async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
+            # STEP 1: GET ALL GROUP ROLES
             async with session.get(
                 f"https://apis.roblox.com/cloud/v2/groups/{group_id}/roles",
                 headers=ROBLOX_OC_HEADERS()
             ) as resp:
+
+                body = await resp.text()
+                print(f"[ROBLOX] Roles response ({resp.status}): {body}")
+
                 if resp.status != 200:
-                    print(f"[ROBLOX] Get roles failed: {resp.status}")
                     return False
-                roles_data = await resp.json()
-    except Exception as e:
-        print(f"[ROBLOX] Exception getting roles: {e}")
-        return False
+                roles_data = json.loads(body)
 
-    role_path = None
-    for role in roles_data.get('groupRoles', []):
-        if role.get('displayName', '').strip().lower() == rank_name.strip().lower():
-            role_path = role.get('path')
-            break
-
-    if not role_path:
-        print(f"[ROBLOX] Rank '{rank_name}' not found in group {group_id}")
-        return False
-
-    # Step 2: get membership path
-    try:
-        async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
+            # STEP 2: FIND TARGET ROLE
+            role_path = None
+            for role in roles_data.get("groupRoles", []):
+                display_name = role.get("displayName", "").strip().lower()
+                if display_name == rank_name.strip().lower():
+                    role_path = role.get("path")
+                    break
+            if not role_path:
+                print(f"[ROBLOX] Role '{rank_name}' not found.")
+                return False
+            print(f"[ROBLOX] Found role path: {role_path}")
+            # STEP 3: GET MEMBERSHIP
             async with session.get(
                 f"https://apis.roblox.com/cloud/v2/groups/{group_id}/memberships",
                 headers=ROBLOX_OC_HEADERS(),
-                params={'filter': f"user == 'users/{roblox_id}'"}
+                params={
+                    "filter": f"user == 'users/{roblox_id}'"
+                }
             ) as resp:
+
+                body = await resp.text()
+                print(f"[ROBLOX] Membership response ({resp.status}): {body}")
                 if resp.status != 200:
-                    print(f"[ROBLOX] Get membership failed: {resp.status}")
                     return False
-                membership_data = await resp.json()
-    except Exception as e:
-        print(f"[ROBLOX] Exception getting membership: {e}")
-        return False
-
-    memberships = membership_data.get('groupMemberships', [])
-    if not memberships:
-        print(f"[ROBLOX] No membership found for {roblox_id}")
-        return False
-
-    membership_path = memberships[0].get('path')
-
-    # Step 3: PATCH
-    try:
-        async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
+                membership_data = json.loads(body)
+            memberships = membership_data.get("groupMemberships", [])
+            if not memberships:
+                print(f"[ROBLOX] No membership found.")
+                return False
+            membership_path = memberships[0]["path"]
+            print(f"[ROBLOX] Membership path: {membership_path}")
+            # STEP 4: PATCH MEMBERSHIP ROLE
+            payload = {
+                "role": {
+                    "path": role_path
+                }
+            }
             async with session.patch(
                 f"https://apis.roblox.com/cloud/v2/{membership_path}",
                 headers=ROBLOX_OC_HEADERS(),
-                json={'role': role_path}
+                json=payload
             ) as resp:
-                print(f"[ROBLOX] Set rank status: {resp.status} — {await resp.text()}")
+                response_text = await resp.text()
+                print(
+                    f"[ROBLOX] Rank PATCH response "
+                    f"({resp.status}): {response_text}"
+                )
                 success = resp.status in (200, 204)
+
                 if success:
-                    bolt_log.info(f"[ROBLOX] Set {roblox_id} → {rank_name} in {group_id}")
+                    bolt_log.info(
+                        f"[ROBLOX] Ranked {roblox_id} "
+                        f"to '{rank_name}' in group {group_id}"
+                    )
                 return success
+
     except Exception as e:
-        print(f"[ROBLOX] Exception setting rank: {e}")
+        print(f"[ROBLOX] Exception in set_group_rank: {e}")
         return False
 
 # ─────────────────────────────────────────────
@@ -598,7 +605,7 @@ async def background_check(interaction: discord.Interaction, users: str):
             roblox_username = roblox['roblox_username']
 
             # Fire all Roblox lookups concurrently
-            account_age, prev_names, all_groups = await asyncio.gather(
+            account_age, prev_names, all_groups, avatar_url = await asyncio.gather(
                 get_roblox_account_age(roblox_id),
                 get_roblox_previous_usernames(roblox_id),
                 get_all_group_ranks(roblox_id),
@@ -687,10 +694,9 @@ async def background_check(interaction: discord.Interaction, users: str):
 #  /induct
 # ─────────────────────────────────────────────
 
-INDUCT_ROLES    = ['BRIGADE KELLERMAN', '26ème Regiment des Chasseurs a Cheval']
-BASE_ROLES      = ['Verified', 'Member']
-REMOVE_ON_INDUCT = ['Garde Nationale', 'Citoyen']
-CAV_INDUCT_RANK = 'BRIGADE KELLERMAN'   # exact Roblox rank name in the Cav group
+INDUCT_ROLES    = ['BRIGADE KELLERMANN', '26ème Régiment de Chasseurs à Cheval', 'Corps de Cavalerie Impériale', 'Cavalier']
+REMOVE_ON_INDUCT = ['Garde Nationale de Cavalerie', 'Guest' 'Citoyen', 'Soldat', 'Caporal', 'Caporal Fourrier']
+CAV_INDUCT_RANK = 'BRIGADE KELLERMANN'   # exact Roblox rank name in the Cav group
 
 @bot.tree.command(name="induct", description="Induct one or more recruits into the regiment.")
 @app_commands.describe(users="Mention one or more users to induct")
@@ -729,7 +735,7 @@ async def induct(interaction: discord.Interaction, users: str):
                 await interaction.followup.send('\n'.join(lines))
                 continue
 
-            roblox_id       = roblox['roblox_id']
+            roblox_id = roblox['roblox_id']
             roblox_username = roblox['roblox_username']
 
             # ── Cav group: accept if pending, then rank ─
@@ -798,18 +804,8 @@ async def induct(interaction: discord.Interaction, users: str):
             if added:
                 lines.append(f"✅ Added: {', '.join(added)}")
 
-            # ── Add base roles ─────────────────────────
-            base_added = []
-            for rn in BASE_ROLES:
-                r = discord.utils.get(guild.roles, name=rn)
-                if r and r not in member.roles:
-                    await member.add_roles(r)
-                    base_added.append(rn)
-            if base_added:
-                lines.append(f"✅ Added base roles: {', '.join(base_added)}")
-
             # ── Update nickname ────────────────────────
-            new_nick = f"[BK] {roblox_username}"
+            new_nick = f"[26e] {roblox_username}"
             try:
                 await member.edit(nick=new_nick)
                 lines.append(f"✅ Nickname set to {new_nick}.")
