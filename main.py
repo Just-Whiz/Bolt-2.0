@@ -445,31 +445,41 @@ async def set_group_rank(roblox_id: str, group_id: str, rank_name: str) -> bool:
     Sets a Roblox user's role in a group using Open Cloud.
     Reusable for inductions, promotions, demotions, etc.
     """
-
     print(f"[ROBLOX] Ranking {roblox_id} -> {rank_name} in {group_id}")
     if not ROBLOX_OPEN_CLOUD:
         print("[ROBLOX] No Open Cloud key configured.")
         return False
     try:
         async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
-            # STEP 1: GET ALL GROUP ROLES
-            async with session.get(
-                f"https://apis.roblox.com/cloud/v2/groups/{group_id}/roles",
-                headers=ROBLOX_OC_HEADERS()
-            ) as resp:
 
-                body = await resp.text()
-                print(f"[ROBLOX] Roles response ({resp.status}): {body}")
+            # STEP 1: GET ALL GROUP ROLES (handling pagination)
+            all_roles = []
+            next_page_token = None
+            while True:
+                params = {'maxPageSize': 20}
+                if next_page_token:
+                    params['pageToken'] = next_page_token
 
-                if resp.status != 200:
-                    return False
-                roles_data = json.loads(body)
+                async with session.get(
+                    f"https://apis.roblox.com/cloud/v2/groups/{group_id}/roles",
+                    headers=ROBLOX_OC_HEADERS(),
+                    params=params
+                ) as resp:
+                    body = await resp.text()
+                    print(f"[ROBLOX] Roles response ({resp.status}): {body}")
+                    if resp.status != 200:
+                        return False
+                    roles_data = json.loads(body)
+
+                all_roles.extend(roles_data.get("groupRoles", []))
+                next_page_token = roles_data.get("nextPageToken", "")
+                if not next_page_token:
+                    break
 
             # STEP 2: FIND TARGET ROLE
             role_path = None
-
             print("[ROBLOX] Available roles:")
-            for role in roles_data.get("groupRoles", []):
+            for role in all_roles:
                 role_name = (
                     role.get("displayName")
                     or role.get("name")
@@ -479,6 +489,7 @@ async def set_group_rank(roblox_id: str, group_id: str, rank_name: str) -> bool:
                 if role_name.lower() == rank_name.strip().lower():
                     role_path = role.get("path")
                     break
+
             if not role_path:
                 print(f"[ROBLOX] Role '{rank_name}' not found.")
                 return False
@@ -488,16 +499,14 @@ async def set_group_rank(roblox_id: str, group_id: str, rank_name: str) -> bool:
             async with session.get(
                 f"https://apis.roblox.com/cloud/v2/groups/{group_id}/memberships",
                 headers=ROBLOX_OC_HEADERS(),
-                params={
-                    "filter": f"user == 'users/{roblox_id}'"
-                }
+                params={"filter": f"user == 'users/{roblox_id}'"}
             ) as resp:
-
                 body = await resp.text()
                 print(f"[ROBLOX] Membership response ({resp.status}): {body}")
                 if resp.status != 200:
                     return False
                 membership_data = json.loads(body)
+
             memberships = membership_data.get("groupMemberships", [])
             if not memberships:
                 print(f"[ROBLOX] No membership found.")
@@ -506,26 +515,18 @@ async def set_group_rank(roblox_id: str, group_id: str, rank_name: str) -> bool:
             print(f"[ROBLOX] Membership path: {membership_path}")
 
             # STEP 4: PATCH MEMBERSHIP ROLE
-            payload = {
-                "role": {
-                    "path": role_path
-                }
-            }
+            payload = {"role": role_path}
             async with session.patch(
                 f"https://apis.roblox.com/cloud/v2/{membership_path}",
                 headers=ROBLOX_OC_HEADERS(),
                 json=payload
             ) as resp:
                 response_text = await resp.text()
-                print(
-                    f"[ROBLOX] Rank PATCH response "
-                    f"({resp.status}): {response_text}"
-                )
+                print(f"[ROBLOX] Rank PATCH response ({resp.status}): {response_text}")
                 success = resp.status in (200, 204)
                 if success:
                     bolt_log.info(
-                        f"[ROBLOX] Ranked {roblox_id} "
-                        f"to '{rank_name}' in group {group_id}"
+                        f"[ROBLOX] Ranked {roblox_id} to '{rank_name}' in group {group_id}"
                     )
                 return success
 
