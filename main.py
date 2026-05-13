@@ -35,6 +35,7 @@ AIOHTTP_TIMEOUT = aiohttp.ClientTimeout(total=10)
 RECRUITMENT_ROLE_NAME = "Recruitment Team"
 
 
+
 # ─────────────────────────────────────────────
 #  GROUP ID → DISPLAY NAME MAPS
 #  Only groups in these maps are shown.
@@ -43,7 +44,6 @@ RECRUITMENT_ROLE_NAME = "Recruitment Team"
 
 FRENCH_GROUP_IDS = {
     # ── France ──────────────────────────────
-    "5610765": "Empire Français",
     "6057395": "Garde Impériale",
     "6057318": "Premier Corps",
     "6057327": "Deuxième Corps",
@@ -374,11 +374,11 @@ def categorise_groups(all_groups: list[dict]) -> tuple[list, list, list]:
         rank = g['rank']
 
         if gid in FRENCH_GROUP_IDS:
-            french.append(f"**{FRENCH_GROUP_IDS[gid]}** — {rank}")
+            french.append(f"{FRENCH_GROUP_IDS[gid]} — {rank}")
         elif gid in COALITION_GROUP_IDS:
-            coalition.append(f"**{COALITION_GROUP_IDS[gid]}** — {rank}")
+            coalition.append(f"{COALITION_GROUP_IDS[gid]} — {rank}")
         elif gid in NEUTRAL_GROUP_IDS:
-            neutral.append(f"**{NEUTRAL_GROUP_IDS[gid]}** — {rank}")
+            neutral.append(f"{NEUTRAL_GROUP_IDS[gid]} — {rank}")
         # anything else: silently ignored
 
     return french, coalition, neutral
@@ -467,15 +467,23 @@ async def set_group_rank(roblox_id: str, group_id: str, rank_name: str) -> bool:
 
             # STEP 2: FIND TARGET ROLE
             role_path = None
+
+            print("[ROBLOX] Available roles:")
             for role in roles_data.get("groupRoles", []):
-                display_name = role.get("displayName", "").strip().lower()
-                if display_name == rank_name.strip().lower():
+                role_name = (
+                    role.get("displayName")
+                    or role.get("name")
+                    or ""
+                ).strip()
+                print(f" - {role_name}")
+                if role_name.lower() == rank_name.strip().lower():
                     role_path = role.get("path")
                     break
             if not role_path:
                 print(f"[ROBLOX] Role '{rank_name}' not found.")
                 return False
             print(f"[ROBLOX] Found role path: {role_path}")
+
             # STEP 3: GET MEMBERSHIP
             async with session.get(
                 f"https://apis.roblox.com/cloud/v2/groups/{group_id}/memberships",
@@ -496,6 +504,7 @@ async def set_group_rank(roblox_id: str, group_id: str, rank_name: str) -> bool:
                 return False
             membership_path = memberships[0]["path"]
             print(f"[ROBLOX] Membership path: {membership_path}")
+
             # STEP 4: PATCH MEMBERSHIP ROLE
             payload = {
                 "role": {
@@ -513,7 +522,6 @@ async def set_group_rank(roblox_id: str, group_id: str, rank_name: str) -> bool:
                     f"({resp.status}): {response_text}"
                 )
                 success = resp.status in (200, 204)
-
                 if success:
                     bolt_log.info(
                         f"[ROBLOX] Ranked {roblox_id} "
@@ -539,9 +547,9 @@ def has_recruitment_role(interaction: discord.Interaction) -> bool:
 #  BOT SETUP
 # ─────────────────────────────────────────────
 
-intents                 = discord.Intents.default()
+intents = discord.Intents.default()
 intents.message_content = True
-intents.members         = True
+intents.members = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
@@ -601,7 +609,7 @@ async def background_check(interaction: discord.Interaction, users: str):
                 )
                 continue
 
-            roblox_id       = roblox['roblox_id']
+            roblox_id = roblox['roblox_id']
             roblox_username = roblox['roblox_username']
 
             # Fire all Roblox lookups concurrently
@@ -638,26 +646,30 @@ async def background_check(interaction: discord.Interaction, users: str):
             embed = discord.Embed(
                 title="Background Check Results",
                 color=discord.Color.dark_blue()
+                
             )
-
-            #Identity
             if avatar_url:
                 embed.set_thumbnail(url=avatar_url)
-            embed.add_field(name="Discord", value=discord_display, inline=True)
-            embed.add_field(name="Nickname", value=discord_nick, inline=True)
-            embed.add_field(name="Roblox Username", value=roblox_username, inline=True)
+
+            #Identity
+            embed.add_field(name="Account Name",
+                            value=f"{discord_display}, {roblox_username}",
+                            inline=False)
 
             # Account info
-            embed.add_field(name="Account Age", value=account_age,  inline=True)
-            embed.add_field(name="Previous Usernames", value=prev_names, inline=True)
+            embed.add_field(name="Account Age", 
+                            value=f"""{account_age}""",  
+                            inline=False)
 
             # Key group ranks (always shown)
-            embed.add_field(name="\u200b", value="\u200b", inline=False)  # spacer
-            embed.add_field(name="Empire Français Rank", value=french_rank, inline=True)
-            embed.add_field(name="Corps de Cavalerie Rank", value=cav_rank,    inline=True)
-
+            embed.add_field(name="French Rankings", 
+                            value=f"""Empire Français Rank - {french_rank}
+                                    Corps de Cavalrie Rank - {cav_rank}
+                                    Previous Usernames:
+                                    {prev_names}""",
+                            inline=False)
+            
             # Nation memberships
-            embed.add_field(name="\u200b", value="\u200b", inline=False)  # spacer
             embed.add_field(
                 name=f"🇫🇷 French Empire & Clients ({len(french)})",
                 value=format_field(french),
@@ -674,7 +686,8 @@ async def background_check(interaction: discord.Interaction, users: str):
                 inline=False
             )
 
-            embed.set_footer(text=f"Roblox ID: {roblox_id}")
+            embed.set_footer(text=f"""Roblox ID: {roblox_id}. 
+https://www.roblox.com/users/{roblox_id}/profile""")
 
             await interaction.followup.send(embed=embed)
             bolt_log.info(
@@ -682,7 +695,6 @@ async def background_check(interaction: discord.Interaction, users: str):
                 f"checked by {interaction.user} - "
                 f"F:{len(french)} C:{len(coalition)} N:{len(neutral)}"
             )
-
         except Exception as e:
             await interaction.followup.send(
                 f"❌ Error checking <@{discord_id}>: {type(e).__name__}: {e}"
@@ -694,8 +706,16 @@ async def background_check(interaction: discord.Interaction, users: str):
 #  /induct
 # ─────────────────────────────────────────────
 
-INDUCT_ROLES    = ['BRIGADE KELLERMANN', '26ème Régiment de Chasseurs à Cheval', 'Corps de Cavalerie Impériale', 'Cavalier']
-REMOVE_ON_INDUCT = ['Garde Nationale de Cavalerie', 'Guest' 'Citoyen', 'Soldat', 'Caporal', 'Caporal Fourrier']
+INDUCT_ROLES    = ['BRIGADE KELLERMANN', 
+                   '26ème Régiment de Chasseurs à Cheval', 
+                   'Corps de Cavalerie Impériale', 
+                   'Cavalier']
+REMOVE_ON_INDUCT = ['Garde Nationale de Cavalerie', 
+                    'Guest', 
+                    'Citoyen', 
+                    'Soldat', 
+                    'Caporal', 
+                    'Caporal Fourrier']
 CAV_INDUCT_RANK = 'BRIGADE KELLERMANN'   # exact Roblox rank name in the Cav group
 
 @bot.tree.command(name="induct", description="Induct one or more recruits into the regiment.")
