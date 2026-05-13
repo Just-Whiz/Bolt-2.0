@@ -779,7 +779,7 @@ async def induct(interaction: discord.Interaction, users: str):
                     await interaction.followup.send('\n'.join(lines))
                     continue
             else:
-                lines.append(f"⚠️ Already in Cav group as {cav_rank}.")
+                lines.append(f"⚠️ Already in Cav group as {cav_rank}. Skipping.")
 
             # ── Set Cav rank → BRIGADE KELLERMAN ───────
             if cav_rank and cav_rank.lower() == CAV_INDUCT_RANK.lower():
@@ -809,7 +809,7 @@ async def induct(interaction: discord.Interaction, users: str):
                     stripped.append(rn)
             lines.append(
                 f"✅ Stripped: {', '.join(stripped)}"
-                if stripped else "⚠️ No roles to strip."
+                if stripped else "⚠️ No roles to strip. Skipping."
             )
 
             # ── Add regiment roles ─────────────────────
@@ -820,6 +820,8 @@ async def induct(interaction: discord.Interaction, users: str):
                     if r not in member.roles:
                         await member.add_roles(r)
                     added.append(rn)
+                elif r in member.roles:
+                    lines.append(f"⚠️ No roles to add. Skipping.")
                 else:
                     lines.append(f"❌ Role not found in Discord: '{rn}'")
             if added:
@@ -828,11 +830,15 @@ async def induct(interaction: discord.Interaction, users: str):
             # ── Update nickname ────────────────────────
             new_nick = f"[26e] {roblox_username}"
             try:
+                print(f"[INDUCT] Attempting nickname change for {member} -> {new_nick}")
                 await member.edit(nick=new_nick)
                 lines.append(f"✅ Nickname set to {new_nick}.")
             except discord.Forbidden:
-                lines.append("⚠️ Could not update nickname (missing permissions).")
-
+                print(f"[INDUCT] Forbidden - bot role too low or target is server owner")
+                lines.append("⚠️ Could not update nickname (missing permissions - add manually). Skipping.")
+            except discord.HTTPException: 
+                print(f"{e.status} {e.text}")
+                lines.append(f"⚠️ Nickname update failed: {e.text}. Add manually. Skippping.")
             bolt_log.info(f"[INDUCT] {roblox_username} inducted by {interaction.user}")
 
         except asyncio.TimeoutError:
