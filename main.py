@@ -21,21 +21,21 @@ load_dotenv()
 #  ENVIRONMENT
 # ─────────────────────────────────────────────
 
-token                = os.getenv("DISCORD_TOKEN")
-BLOXLINK_API_KEY     = os.getenv("BLOXLINK_API_KEY")
-GUILD_ID             = os.getenv("GUILD_ID")
-ROBLOX_OPEN_CLOUD    = os.getenv("ROBLOX_OPEN_CLOUD_KEY")
+token = os.getenv("DISCORD_TOKEN")
+BLOXLINK_API_KEY = os.getenv("BLOXLINK_API_KEY")
+GUILD_ID = os.getenv("GUILD_ID")
+ROBLOX_OPEN_CLOUD = os.getenv("ROBLOX_OPEN_CLOUD_KEY")
 FRENCH_MAIN_GROUP_ID = os.getenv("FRENCH_GROUP_ID", "5610765")
-CAV_GROUP_ID         = os.getenv("CAV_GROUP_ID", "195387641")
+CAV_GROUP_ID = os.getenv("CAV_GROUP_ID", "195387641")
 
 ROBLOX_OC_HEADERS = lambda: {
     "x-api-key":    ROBLOX_OPEN_CLOUD,
     "Content-Type": "application/json"
 }
 
-VERIFIED_USERS_PATH   = "verified_users.json"
+VERIFIED_USERS_PATH = "verified_users.json"
 RECRUITMENT_ROLE_NAME = "Recruitment Team"
-VERIFIED_ROLE_NAME    = "Verified"
+VERIFIED_ROLE_NAME = "Verified"
 
 # One shared timeout for all HTTP calls
 AIOHTTP_TIMEOUT = aiohttp.ClientTimeout(total=12)
