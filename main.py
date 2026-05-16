@@ -159,6 +159,25 @@ NEUTRAL_GROUP_IDS = {
     "17018827": "Nizâm-ı Cedîd Ordu",
 }
 
+# All Discord roles that should be stripped on purge
+PURGE_ROLES = [
+    "BRIGADE KELLERMANN",
+    "26ème Régiment de Chasseurs à Cheval",
+    "Corps de Cavalerie Impériale",
+    "Cavalier",
+    "Verified",
+    "Garde Nationale de Cavalerie",
+    "Citoyen",
+    "Soldat",
+    "Caporal",
+    "Caporal Fourrier",
+]
+
+# All roles in Discord & Roblox to be added on /induct
+INDUCT_ROLES     = ["BRIGADE KELLERMANN", "26ème Régiment de Chasseurs à Cheval", "Corps de Cavalerie Impériale", "Cavalier"]
+REMOVE_ON_INDUCT = ["Garde Nationale de Cavalerie", "Guest", "Citoyen", "Soldat", "Caporal", "Caporal Fourrier"]
+CAV_INDUCT_RANK  = "BRIGADE KELLERMANN"
+
 # ─────────────────────────────────────────────
 #  LOGGING
 # ─────────────────────────────────────────────
@@ -209,23 +228,25 @@ async def _save_cache():
     async with CACHE_LOCK:
         try:
             with open(VERIFIED_USERS_PATH, "w", encoding="utf-8") as f:
-                json.dump(verified_cache, f, indent=None, ensure_ascii=False)
+                json.dump(verified_cache, f, indent=2, ensure_ascii=False)
         except Exception as e:
+            print(f"[CACHE] Save failed: {e}")
             bolt_log.error(f"[CACHE] Save failed: {e}")
 
 def get_cached_roblox(discord_id: str) -> dict | None:
     return verified_cache.get(str(discord_id))
 
-async def cache_roblox_user(discord_id: str, roblox_id: str, username: str):
+async def cache_roblox_user(discord_id: str, roblox_id: str, username: str, discord_username: str=""):
     """Write one entry to the in-memory cache and flush to disk."""
     verified_cache[str(discord_id)] = {
         "roblox_id": str(roblox_id),
         "roblox_username": username,
+        "discord_username": discord_username,
         "cached_at": datetime.now(timezone.utc).isoformat()
     }
     await _save_cache()
-    print(f"[CACHE] Cached {discord_id} → {username}")
-    bolt_log.info(f"[CACHE] Cached {discord_id} → {username}")
+    print(f"[CACHE] Cached {discord_id} → {username} ({discord_username})")
+    bolt_log.info(f"[CACHE] Cached {discord_id} → {username} ((discord_username))")
 
 # ─────────────────────────────────────────────
 #  ROBLOX USER INFO  (one call, all data)
@@ -249,6 +270,7 @@ async def fetch_roblox_user_info(roblox_id: str) -> dict:
                     data = await resp.json()
         except Exception as e:
             print(f"[ROBLOX] fetch_roblox_user_info exception: {e}")
+            bolt_log.info(f"[ROBLOX] fetch_roblox_user_info exception: {e}")
             return {}
 
     created_str = data.get("created", "")
@@ -482,6 +504,52 @@ async def set_group_rank(roblox_id: str, group_id: str, rank_name: str) -> bool:
             print(f"[ROBLOX] set_group_rank exception: {e}")
             return False
 
+async def kick_from_group(roblox_id: str, group_id: str) -> bool:
+    """
+    Removes a user from a Roblox group entirely using Open Cloud.
+    Uses DELETE on their membership path.
+    """
+    if not ROBLOX_OPEN_CLOUD:
+        print("[ROBLOX] No Open Cloud key.")
+        return False
+
+    async with ROBLOX_SEMAPHORE:
+        try:
+            async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
+
+                # Find membership path first
+                async with session.get(
+                    f"https://apis.roblox.com/cloud/v2/groups/{group_id}/memberships",
+                    headers=ROBLOX_OC_HEADERS(),
+                    params={"filter": f"user == 'users/{roblox_id}'"}
+                ) as resp:
+                    if resp.status != 200:
+                        print(f"[ROBLOX] Get membership failed: {resp.status}")
+                        return False
+                    data         = await resp.json()
+                    memberships  = data.get("groupMemberships", [])
+                    if not memberships:
+                        print(f"[ROBLOX] {roblox_id} not in group {group_id}")
+                        return False
+                    membership_path = memberships[0]["path"]
+
+                # DELETE the membership
+                async with session.delete(
+                    f"https://apis.roblox.com/cloud/v2/{membership_path}",
+                    headers=ROBLOX_OC_HEADERS()
+                ) as resp:
+                    print(f"[ROBLOX] Kick status: {resp.status}")
+                    success = resp.status in (200, 204)
+                    if success:
+                        bolt_log.info(
+                            f"[ROBLOX] Kicked {roblox_id} from group {group_id}"
+                        )
+                    return success
+
+        except Exception as e:
+            print(f"[ROBLOX] kick_from_group exception: {e}")
+            return False
+
 # ─────────────────────────────────────────────
 #  BLOXLINK
 # ─────────────────────────────────────────────
@@ -527,17 +595,21 @@ async def get_roblox_user(discord_id: str) -> dict | None:
         print(f"[BLOXLINK] Could not resolve username for {roblox_id} — not caching")
         return {"roblox_id": roblox_id, "roblox_username": f"Unknown ({roblox_id})"}
 
-    await cache_roblox_user(discord_id, roblox_id, username)
+    # After you have roblox_id and username resolved...
+    discord_member = bot.get_guild(int(GUILD_ID))
+    discord_member = discord_member.get_member(int(discord_id)) if discord_member else None
+    discord_uname  = str(discord_member) if discord_member else ""
+
+    await cache_roblox_user(discord_id, roblox_id, username, discord_uname)
     return {"roblox_id": roblox_id, "roblox_username": username}
 
 # ─────────────────────────────────────────────
 #  STARTUP SYNC  (only un-cached members, throttled)
 # ─────────────────────────────────────────────
-
 async def sync_verified_users():
     """
-    On startup, resolves only members who are NOT already cached.
-    Waits 2 seconds between Bloxlink calls to avoid rate-limiting.
+    On startup, resolves only members NOT already cached.
+    Throttled to 2s between Bloxlink calls.
     """
     print("[SYNC] Starting verified user sync...")
     guild = bot.get_guild(int(GUILD_ID))
@@ -551,7 +623,7 @@ async def sync_verified_users():
         return
 
     to_sync = [m for m in verified_role.members if not get_cached_roblox(str(m.id))]
-    print(f"[SYNC] {len(to_sync)} uncached members to resolve.")
+    print(f"[SYNC] {len(verified_cache)} already cached. {len(to_sync)} to resolve.")
 
     synced = failed = 0
     for member in to_sync:
@@ -559,17 +631,26 @@ async def sync_verified_users():
             roblox = await get_roblox_user(str(member.id))
             if roblox and not roblox["roblox_username"].startswith("Unknown"):
                 synced += 1
-                print(f"[SYNC] {member} → {roblox['roblox_username']}")
+                print(
+                    f"[SYNC] {member.id} → "
+                    f"{roblox['roblox_username']} "
+                    f"(Roblox ID: {roblox['roblox_id']})"
+                )
+                bolt_log.info(
+                    f"[SYNC] {member.id} → "
+                    f"{roblox['roblox_username']} "
+                    f"({roblox['roblox_id']})"
+                )
             else:
                 failed += 1
-                print(f"[SYNC] Failed for {member}")
-            await asyncio.sleep(2)   # 2s gap — stays well under Bloxlink rate limit
+                print(f"[SYNC] Failed for {member.id} ({member})")
+            await asyncio.sleep(2)
         except Exception as e:
             failed += 1
-            print(f"[SYNC] Error for {member}: {e}")
+            print(f"[SYNC] Error for {member.id} ({member}): {e}")
 
-    print(f"[SYNC] Done. Synced={synced} Failed={failed}")
-    bolt_log.info(f"[SYNC] Done. Synced={synced} Failed={failed}")
+    print(f"[SYNC] Complete — Synced: {synced} | Failed: {failed}")
+    bolt_log.info(f"[SYNC] Complete — Synced: {synced} | Failed: {failed}")
 
 # ─────────────────────────────────────────────
 #  GROUP CATEGORISATION + DISPLAY HELPERS
@@ -776,10 +857,6 @@ async def background_check(interaction: discord.Interaction, users: str):
 #  /induct
 # ─────────────────────────────────────────────
 
-INDUCT_ROLES     = ["BRIGADE KELLERMANN", "26ème Régiment de Chasseurs à Cheval", "Corps de Cavalerie Impériale", "Cavalier"]
-REMOVE_ON_INDUCT = ["Garde Nationale de Cavalerie", "Guest", "Citoyen", "Soldat", "Caporal", "Caporal Fourrier"]
-CAV_INDUCT_RANK  = "BRIGADE KELLERMANN"
-
 @bot.tree.command(name="induct", description="Induct one or more recruits into the regiment.")
 @app_commands.describe(users="Mention one or more users to induct")
 async def induct(interaction: discord.Interaction, users: str):
@@ -903,6 +980,108 @@ async def induct(interaction: discord.Interaction, users: str):
             lines.append(f"❌ Unexpected error: {type(e).__name__}: {e}")
             bolt_log.error(f"[INDUCT] Error for {discord_id}: {e}")
             print(f"[INDUCT] Error: {e}")
+
+        await interaction.followup.send("\n".join(lines))
+
+# ─────────────────────────────────────────────
+#  /purge
+# ─────────────────────────────────────────────
+@bot.tree.command(
+    name="purge",
+    description="Strip all roles, kick from Roblox group, and reset nickname."
+)
+@app_commands.describe(users="Mention one or more users to purge")
+async def purge(interaction: discord.Interaction, users: str):
+    if not has_recruitment_role(interaction):
+        await interaction.response.send_message(
+            f"❌ You need the **{RECRUITMENT_ROLE_NAME}** role to use this command.",
+            ephemeral=True
+        )
+        return
+
+    await interaction.response.defer()
+
+    mentioned_ids = MENTION_PATTERN.findall(users)
+    if not mentioned_ids:
+        await interaction.followup.send("Please mention at least one user.")
+        return
+
+    for discord_id in mentioned_ids:
+        lines = ["**Purge Results**"]
+        try:
+            # Resolve member
+            member = interaction.guild.get_member(int(discord_id))
+            if not member:
+                try:
+                    member = await asyncio.wait_for(
+                        interaction.guild.fetch_member(int(discord_id)), timeout=10
+                    )
+                except Exception:
+                    lines.append(f"❌ Could not find Discord member <@{discord_id}>.")
+                    await interaction.followup.send("\n".join(lines))
+                    continue
+
+            lines.append(f"<@{discord_id}> — {member.display_name}")
+
+            # Bloxlink lookup
+            roblox = await get_roblox_user(discord_id)
+
+            # ── Roblox group kick ──────────────────────
+            if not roblox:
+                lines.append("⚠️ Not verified with Bloxlink — skipping Roblox kick.")
+            else:
+                roblox_id = roblox["roblox_id"]
+
+                # Check if they're actually in the group first
+                cav_rank = await get_group_rank(roblox_id, CAV_GROUP_ID)
+                if not cav_rank:
+                    lines.append("⚠️ Not in Cav Roblox group — skipping kick.")
+                else:
+                    kicked = await asyncio.wait_for(
+                        kick_from_group(roblox_id, CAV_GROUP_ID),
+                        timeout=15
+                    )
+                    lines.append(
+                        "✅ Kicked from Corps de Cavalerie Impériale (Roblox)."
+                        if kicked else
+                        "❌ Failed to kick from Roblox group — remove manually."
+                    )
+
+            # ── Strip Discord roles ────────────────────
+            guild    = interaction.guild
+            stripped = []
+            for rn in PURGE_ROLES:
+                r = discord.utils.get(guild.roles, name=rn)
+                if r and r in member.roles:
+                    await member.remove_roles(r)
+                    stripped.append(rn)
+
+            lines.append(
+                f"✅ Stripped Discord roles: {', '.join(stripped)}"
+                if stripped else
+                "⚠️ No matching Discord roles found to strip."
+            )
+
+            # ── Reset nickname ─────────────────────────
+            try:
+                await member.edit(nick=None)   # None = revert to account username
+                lines.append("✅ Nickname reset.")
+            except discord.Forbidden:
+                lines.append("⚠️ Cannot reset nickname (bot role too low or owner).")
+            except discord.HTTPException as e:
+                lines.append(f"⚠️ Nickname reset failed: {e.text}")
+
+            bolt_log.info(
+                f"[PURGE] {member} purged by {interaction.user}"
+            )
+
+        except asyncio.TimeoutError:
+            lines.append("❌ A request timed out.")
+            bolt_log.error(f"[PURGE] Timeout for {discord_id}")
+        except Exception as e:
+            lines.append(f"❌ Unexpected error: {type(e).__name__}: {e}")
+            bolt_log.error(f"[PURGE] Error for {discord_id}: {e}")
+            print(f"[PURGE] Error: {e}")
 
         await interaction.followup.send("\n".join(lines))
 
