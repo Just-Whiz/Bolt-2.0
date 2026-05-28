@@ -179,6 +179,88 @@ REMOVE_ON_INDUCT = ["Garde Nationale de Cavalerie", "Guest", "Citoyen", "Soldat"
 CAV_INDUCT_RANK  = "BRIGADE KELLERMANN"
 
 # ─────────────────────────────────────────────
+# RANK & BRIGADE CONFIGURATION
+# ─────────────────────────────────────────────
+
+# Discord Rank progression (in order, lowest to highest)
+DISCORD_RANK_PROGRESSION = [
+    "Conscrit",
+    "Veteran",
+    "Cavalier",
+    "Brigadier",
+    "Brigadier-Fourrier",
+    "Marechal des Logis",
+    "Marechal des Logis-Chef",
+    "Adjudant",
+    "Adjudant Sous-Officier",
+    "Lieutenant en Second",
+    "Lieutenant en Premier",
+    "Capitaine",
+    "Chef dÉscadron",
+    "Major",
+    "Colonel",
+    "Adjudant-Commandant",
+    "Adjoint du Corps",
+    "Adjoint du General de Division",
+    "Adjoint du General de Brigade",
+    "Adjoint du Marechal",
+    "Adjoint d'État Major",
+    "Commandant de Cavalerie Brigade",
+]
+DRAFT_RESET_RANK = "Cavalier"
+
+# Ranks at index >= this require the senior promoter role
+# Index 6 = "Marechal des Logis-Chef" (i.e. promoting TO anything above Marechal des Logis)
+SENIOR_PROMOTION_THRESHOLD = DISCORD_RANK_PROGRESSION.index("Marechal des Logis-Chef")
+
+# The Discord role name required to promote above Marechal des Logis
+SENIOR_PROMOTER_ROLE = "État-Major"  # ← change this to whatever role you want
+
+# Roles that grant permission to use /promote at all (mirrors COMMAND_PERMISSIONS)
+PROMOTE_ALLOWED_ROLES = {"Adjudant Sous-Officier", "État-Major"}  # and any above
+
+# Fast lookup: name → index
+DISCORD_RANK_INDEX = {name: i for i, name in enumerate(DISCORD_RANK_PROGRESSION)}
+
+# All Discord rank role names as a set, for stripping
+ALL_RANK_ROLES = set(DISCORD_RANK_PROGRESSION)
+
+# Roblox brigade rank names (used with set_group_rank)
+CAV_RANK_PROGRESSION = [
+    (243, "BRIGADE KELLERMANN"),
+    (244, "BRIGADE LASALLE"),
+    (245, "BRIGADE BESSIÈRES"),
+    (246, "Sous-Officier"),
+    (247, "Adjutant Sous-Officier"),
+    (248, "Officier Subalterne"),
+    (249, "Officier Supérieur"),
+    (250, "Officier à la Suite"),
+    (251, "Commandant d'Échelon"),
+    (252, "Général"),
+    (253, "Maréchal en Major Général"),
+    (254, "Napoléon"),
+    (255, "Maréchal"),
+]
+CAV_RANK_INDEX = {rank: i for i, (rank, _) in enumerate(CAV_RANK_PROGRESSION)}
+
+# Brigade Roblox rank names (only the three brigades, in order)
+BRIGADES = [
+    "BRIGADE KELLERMANN",
+    "BRIGADE LASALLE",
+    "BRIGADE BESSIÈRES",
+]
+
+# Regiment Discord roles, keyed by brigade Roblox rank name
+BRIGADE_REGIMENT_ROLES = {
+    "BRIGADE KELLERMANN": ["26ème Régiment de Chasseurs à Cheval"],
+    "BRIGADE LASALLE":    ["5ème Chevau-Légers Lanciers", "10ème Régiment de Hussards"],
+    "BRIGADE BESSIÈRES":  ["Grenadiers à Cheval de la Garde Impériale"],
+}
+
+# All regiment role names as a set, for stripping on draft
+ALL_REGIMENT_ROLES = {r for roles in BRIGADE_REGIMENT_ROLES.values() for r in roles}
+
+# ─────────────────────────────────────────────
 #  LOGGING
 # ─────────────────────────────────────────────
 
@@ -371,6 +453,33 @@ async def get_group_rank(roblox_id: str, group_id: str) -> str | None:
         if g["id"] == str(group_id):
             return g["rank"]
     return None
+
+# ─────────────────────────────────────────────
+# DISCORD LOOKUP HELPERS
+# ─────────────────────────────────────────────
+
+def get_member_discord_rank(member: discord.Member) -> str | None:
+    """Return the highest Discord rank role the member currently holds."""
+    best = None
+    best_idx = -1
+    for role in member.roles:
+        idx = DISCORD_RANK_INDEX.get(role.name)
+        if idx is not None and idx > best_idx:
+            best = role.name
+            best_idx = idx
+    return best
+
+
+def executor_rank_index(interaction: discord.Interaction) -> int:
+    """Return the rank index of the executor, or -1 if they hold no rank role."""
+    member = interaction.guild.get_member(interaction.user.id)
+    rank = get_member_discord_rank(member)
+    return DISCORD_RANK_INDEX.get(rank, -1)
+
+
+def executor_has_senior_role(interaction: discord.Interaction) -> bool:
+    member = interaction.guild.get_member(interaction.user.id)
+    return any(r.name == SENIOR_PROMOTER_ROLE for r in member.roles)
 
 # ─────────────────────────────────────────────
 #  ROBLOX OPEN CLOUD — ACCEPT + RANK
@@ -1084,6 +1193,273 @@ async def purge(interaction: discord.Interaction, users: str):
             print(f"[PURGE] Error: {e}")
 
         await interaction.followup.send("\n".join(lines))
+
+# ─────────────────────────────────────────────
+#  /promote
+# ─────────────────────────────────────────────
+
+class PromoteTypeSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="Rank Promotion", value="rank",
+                                 description="Move target(s) up to a chosen rank"),
+            discord.SelectOption(label="Draft to Brigade", value="draft",
+                                 description="Reset rank to Cavalier and move to next brigade"),
+        ]
+        super().__init__(placeholder="Choose promotion type…", options=options, min_values=1, max_values=1)
+
+    async def callback(self, interaction: discord.Interaction):
+        self.view.promo_type = self.values[0]
+        await interaction.response.defer()
+        self.view.stop()
+
+
+class TargetRankSelect(discord.ui.Select):
+    def __init__(self, min_rank_idx: int, max_rank_idx: int):
+        """Show only ranks the executor is allowed to promote to."""
+        options = [
+            discord.SelectOption(label=name, value=name)
+            for i, name in enumerate(DISCORD_RANK_PROGRESSION)
+            if min_rank_idx <= i <= max_rank_idx
+        ]
+        super().__init__(placeholder="Select target rank…", options=options, min_values=1, max_values=1)
+
+    async def callback(self, interaction: discord.Interaction):
+        self.view.target_rank = self.values[0]
+        await interaction.response.defer()
+        self.view.stop()
+
+
+class BrigadeSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label=b, value=b) for b in BRIGADES
+        ]
+        super().__init__(placeholder="Select target brigade…", options=options, min_values=1, max_values=1)
+
+    async def callback(self, interaction: discord.Interaction):
+        self.view.target_brigade = self.values[0]
+        await interaction.response.defer()
+        self.view.stop()
+
+
+class SingleSelectView(discord.ui.View):
+    def __init__(self, select: discord.ui.Select, timeout=60):
+        super().__init__(timeout=timeout)
+        self.promo_type = None
+        self.target_rank = None
+        self.target_brigade = None
+        self.add_item(select)
+
+
+COMMAND_PERMISSIONS = {
+    "induct":             {"Recruitment Team", "État-Major"},
+    "purge":              {"État-Major"},
+    "promote":            {"Adjudant Sous-Officier", "État-Major"},
+    "background-check":   {"Recruitment Team", "État-Major", "Officier Supérieur"},
+}
+
+def has_command_permission(interaction: discord.Interaction, command_name: str) -> bool:
+    member = interaction.guild.get_member(interaction.user.id)
+    if not member:
+        return False
+    allowed = COMMAND_PERMISSIONS.get(command_name, set())
+    return any(r.name in allowed for r in member.roles)
+
+
+@bot.tree.command(name="promote", description="Promote member(s) by rank or draft them to the next brigade.")
+@app_commands.describe(members="Mention one or more members to promote")
+@app_commands.default_permissions(manage_roles=True)
+async def promote(interaction: discord.Interaction, members: str):
+    if not has_command_permission(interaction, "promote"):
+        await interaction.response.send_message(
+            "❌ You don't have permission to use this command.", ephemeral=True)
+        return
+
+    # Parse mentions
+    mention_ids = [int(m) for m in re.findall(r"<@!?(\d+)>", members)]
+    targets = [interaction.guild.get_member(mid) for mid in mention_ids]
+    targets = [t for t in targets if t is not None]
+
+    if not targets:
+        await interaction.response.send_message("❌ No valid members mentioned.", ephemeral=True)
+        return
+
+    exec_rank_idx = executor_rank_index(interaction)
+    is_senior = executor_has_senior_role(interaction)
+
+    # Check executor holds at least Adjudant Sous-Officier
+    min_allowed = DISCORD_RANK_INDEX.get("Adjudant Sous-Officier", 0)
+    if exec_rank_idx < min_allowed and not is_senior:
+        await interaction.response.send_message(
+            "❌ You must hold at least **Adjudant Sous-Officier** to promote.", ephemeral=True)
+        return
+
+    # Step 1 — choose promotion type
+    type_view = SingleSelectView(PromoteTypeSelect())
+    await interaction.response.send_message(
+        "**Step 1:** What type of promotion is this?", view=type_view, ephemeral=True)
+    await type_view.wait()
+
+    if type_view.promo_type is None:
+        await interaction.edit_original_response(content="⏱️ Timed out.", view=None)
+        return
+
+    promo_type = type_view.promo_type
+
+    # ── DRAFT flow ────────────────────────────────────────────────────────────
+    if promo_type == "draft":
+        brigade_view = SingleSelectView(BrigadeSelect())
+        await interaction.edit_original_response(
+            content="**Step 2:** Select the brigade to draft target(s) into:", view=brigade_view)
+        await brigade_view.wait()
+
+        if brigade_view.target_brigade is None:
+            await interaction.edit_original_response(content="⏱️ Timed out.", view=None)
+            return
+
+        target_brigade = brigade_view.target_brigade
+        regiment_roles = BRIGADE_REGIMENT_ROLES[target_brigade]
+
+        await interaction.edit_original_response(content="⏳ Processing draft…", view=None)
+
+        results = []
+
+        async def draft_one(member: discord.Member):
+            roblox = await get_roblox_user(str(member.id))
+            if not roblox:
+                return f"❌ **{member.display_name}** — could not resolve Roblox account."
+            roblox_id = roblox["roblox_id"]
+            roblox_username = roblox["roblox_username"]
+
+            errors = []
+
+            # 1. Set Roblox brigade rank
+            async with ROBLOX_SEMAPHORE:
+                ok = await set_group_rank(roblox_id, CAV_GROUP_ID, target_brigade)
+            if not ok:
+                errors.append("failed to set Roblox brigade rank")
+
+            # 2. Strip all rank roles, add Cavalier
+            roles_to_remove = [r for r in member.roles if r.name in ALL_RANK_ROLES]
+            cavalier_role = discord.utils.get(interaction.guild.roles, name=DRAFT_RESET_RANK)
+            try:
+                if roles_to_remove:
+                    await member.remove_roles(*roles_to_remove, reason="Draft reset")
+                if cavalier_role:
+                    await member.add_roles(cavalier_role, reason=f"Drafted to {target_brigade}")
+                else:
+                    errors.append(f"'{DRAFT_RESET_RANK}' role not found in server")
+            except discord.Forbidden:
+                errors.append("missing permissions to modify roles")
+
+            # 3. Strip all brigade Discord roles, add new brigade role
+            ALL_BRIGADE_ROLES = set(BRIGADES)
+            old_brigade_roles = [r for r in member.roles if r.name in ALL_BRIGADE_ROLES]
+            new_brigade_role = discord.utils.get(interaction.guild.roles, name=target_brigade)
+            try:
+                if old_brigade_roles:
+                    await member.remove_roles(*old_brigade_roles, reason="Draft brigade swap")
+                if new_brigade_role:
+                    await member.add_roles(new_brigade_role, reason=f"Drafted to {target_brigade}")
+                else:
+                    errors.append(f"'{target_brigade}' role not found in server")
+            except discord.Forbidden:
+                errors.append("missing permissions to modify brigade roles")
+
+            # 4. Strip all regiment roles, add new regiment role(s)
+            old_regiment_roles = [r for r in member.roles if r.name in ALL_REGIMENT_ROLES]
+            new_regiment_roles = [
+                discord.utils.get(interaction.guild.roles, name=rr) for rr in regiment_roles
+            ]
+            new_regiment_roles = [r for r in new_regiment_roles if r is not None]
+            try:
+                if old_regiment_roles:
+                    await member.remove_roles(*old_regiment_roles, reason="Draft regiment swap")
+                if new_regiment_roles:
+                    await member.add_roles(*new_regiment_roles, reason=f"Drafted to {target_brigade}")
+            except discord.Forbidden:
+                errors.append("missing permissions to modify regiment roles")
+
+            if errors:
+                return f"⚠️ **{roblox_username or member.display_name}** — drafted with issues: {'; '.join(errors)}."
+            regiment_str = ", ".join(regiment_roles)
+            return (f"✅ **{roblox_username or member.display_name}** — drafted to **{target_brigade}** "
+                    f"({regiment_str}), rank reset to **{DRAFT_RESET_RANK}**.")
+
+        async with asyncio.timeout(120):
+            results = await asyncio.gather(*[draft_one(m) for m in targets])
+
+        await interaction.edit_original_response(content="\n".join(results), view=None)
+        return
+
+    # ── RANK PROMOTION flow ───────────────────────────────────────────────────
+
+    # Executor can only promote up to one rank below their own, unless senior
+    if is_senior:
+        max_promotable_idx = len(DISCORD_RANK_PROGRESSION) - 1
+    else:
+        max_promotable_idx = exec_rank_idx - 1
+
+    # Floor: one above Conscrit (can't promote to Conscrit)
+    min_promotable_idx = 1
+
+    if max_promotable_idx < min_promotable_idx:
+        await interaction.edit_original_response(
+            content="❌ Your rank is too low to promote anyone.", view=None)
+        return
+
+    # Filter by senior threshold
+    if not is_senior:
+        max_promotable_idx = min(max_promotable_idx, SENIOR_PROMOTION_THRESHOLD - 1)
+
+    rank_view = SingleSelectView(TargetRankSelect(min_promotable_idx, max_promotable_idx))
+    await interaction.edit_original_response(
+        content="**Step 2:** Select the rank to promote target(s) to:", view=rank_view)
+    await rank_view.wait()
+
+    if rank_view.target_rank is None:
+        await interaction.edit_original_response(content="⏱️ Timed out.", view=None)
+        return
+
+    target_rank_name = rank_view.target_rank
+    target_rank_idx = DISCORD_RANK_INDEX[target_rank_name]
+
+    await interaction.edit_original_response(content="⏳ Processing promotions…", view=None)
+
+    results = []
+
+    async def promote_one(member: discord.Member):
+        current_rank = get_member_discord_rank(member)
+        current_idx = DISCORD_RANK_INDEX.get(current_rank, -1)
+
+        if current_idx >= target_rank_idx:
+            return (f"⚠️ **{member.display_name}** — already holds **{current_rank}**, "
+                    f"which is equal to or above **{target_rank_name}**. Skipped.")
+
+        # Executor must outrank the target
+        if current_idx >= exec_rank_idx and not is_senior:
+            return f"❌ **{member.display_name}** — you cannot promote someone of equal or higher rank."
+
+        new_role = discord.utils.get(interaction.guild.roles, name=target_rank_name)
+        if not new_role:
+            return f"❌ **{member.display_name}** — role **{target_rank_name}** not found in server."
+
+        roles_to_remove = [r for r in member.roles if r.name in ALL_RANK_ROLES]
+        try:
+            if roles_to_remove:
+                await member.remove_roles(*roles_to_remove, reason="Rank promotion strip")
+            await member.add_roles(new_role, reason=f"Promoted to {target_rank_name}")
+        except discord.Forbidden:
+            return f"❌ **{member.display_name}** — missing permissions to modify roles."
+
+        prev = current_rank or "no rank"
+        return f"✅ **{member.display_name}** — promoted from **{prev}** → **{target_rank_name}**."
+
+    async with asyncio.timeout(120):
+        results = await asyncio.gather(*[promote_one(m) for m in targets])
+
+    await interaction.edit_original_response(content="\n".join(results), view=None)
 
 # ─────────────────────────────────────────────
 #  RUN
