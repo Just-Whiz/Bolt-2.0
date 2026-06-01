@@ -1839,7 +1839,7 @@ class SingleSelectView(discord.ui.View):
         self.add_item(select)
 
 # ============================================================
-#  /promote
+#  /promote - for moving between brigades and the like
 # ============================================================
 
 @bot.tree.command(name="promote", description="Promote member(s) by rank, or draft them to a brigade.")
