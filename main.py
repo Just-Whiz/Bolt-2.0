@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ============================================================
-#  ENVIRONMENT
+#  ENVIRONMENT - ACCESSES ALL .env FILE VARIABLES
 # ============================================================
 
 DISCORD_TOKEN        = os.getenv("DISCORD_TOKEN")
