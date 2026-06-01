@@ -4,5 +4,4 @@ credentials.json
 bolt.log
 env
 test.py
-venv/
-venv/
+venv
