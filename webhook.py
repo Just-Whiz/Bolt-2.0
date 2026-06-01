@@ -4,13 +4,16 @@ import logging
 import os
 import subprocess
 
+from dotenv import load_dotenv
 from flask import Flask, abort, request
+
+load_dotenv()
 
 # ── Config ────────────────────────────────────────────────────────────────────
 PROJECT_DIR  = os.getenv("PROJECT_DIR", "/home/justwhiz/Desktop/GardeProjects/Bolt-2.0")
 PM2_APP_NAME = os.getenv("PM2_APP_NAME", "bolt-bot")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
-POR = int(os.getenv("WEBHOOK_PORT", 9000))
+PORT = int(os.getenv("WEBHOOK_PORT", 9000))
 BRANCH = os.getenv("GIT_BRANCH", "main")
 # ─────────────────────────────────────────────────────────────────────────────
 
