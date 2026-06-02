@@ -614,7 +614,7 @@ async def roblox_get_user_info(roblox_id: str) -> dict:
     async with ROBLOX_SEMAPHORE:
         try:
             async with httpx.AsyncClient(timeout=15) as client:
-                r = await client.get(f"https://roblox-proxy.christiansuy25.workers.dev/v1/users/{roblox_id}")
+                r = await client.get(f"https://roblox-proxy.christiansuy25.workers.dev/users/v1/users/{roblox_id}")
                 if r.status_code != 200:
                     print(f"[ROBLOX] roblox_get_user_info {roblox_id} HTTP {r.status_code}: {r.text[:100]}")
                     return {}
@@ -645,7 +645,7 @@ async def roblox_get_previous_usernames(roblox_id: str) -> str:
     async with ROBLOX_SEMAPHORE:
         try:
             async with httpx.AsyncClient(timeout=15) as s:
-                r = await s.get(f"https://users.roblox.com/v1/users/{roblox_id}/username-history?limit=10")
+                r = await s.get(f"https://roblox-proxy.christiansuy25.workers.dev/users/v1/users/{roblox_id}/username-history?limit=10")
                 if r.status_code != 200:
                     return "None"
                 names = [e["name"] for e in r.json().get("data", [])]
@@ -658,7 +658,7 @@ async def roblox_get_avatar_url(roblox_id: str) -> str | None:
         try:
             async with httpx.AsyncClient(timeout=15) as s:
                 r = await s.get(
-                    f"https://thumbnails.roblox.com/v1/users/avatar-headshot"
+                    f"https://roblox-proxy.christiansuy25.workers.dev/thumbnails/v1/users/avatar-headshot"
                     f"?userIds={roblox_id}&size=150x150&format=Png&isCircular=false"
                 )
                 if r.status_code != 200:
@@ -672,7 +672,7 @@ async def roblox_get_group_memberships(roblox_id: str) -> list[dict]:
     async with ROBLOX_SEMAPHORE:
         try:
             async with httpx.AsyncClient(timeout=15) as s:
-                r = await s.get(f"https://groups.roblox.com/v2/users/{roblox_id}/groups/roles")
+                r = await s.get(f"https://roblox-proxy.christiansuy25.workers.dev/groups/v2/users/{roblox_id}/groups/roles")
                 if r.status_code != 200:
                     return []
                 return [
@@ -680,7 +680,7 @@ async def roblox_get_group_memberships(roblox_id: str) -> list[dict]:
                     for e in r.json().get("data", [])
                 ]
         except Exception as e:
-            print(f"[ROBLOX] roblox_get_group_memberships error: {e}")
+            print(f"[ROBLOX] roblox_get_group_memberships error: {e!r}")
             return []
 
 async def roblox_get_group_rank(roblox_id: str, group_id: str) -> str | None:
