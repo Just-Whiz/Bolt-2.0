@@ -25,17 +25,17 @@ load_dotenv()
 #  ENVIRONMENT - ACCESSES ALL .env FILE VARIABLES
 # ============================================================
 
-DISCORD_TOKEN        = os.getenv("DISCORD_TOKEN")
-BLOXLINK_API_KEY     = os.getenv("BLOXLINK_API_KEY")
-GUILD_ID             = os.getenv("GUILD_ID")
-ROBLOX_OPEN_CLOUD    = os.getenv("ROBLOX_OPEN_CLOUD_KEY")
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+BLOXLINK_API_KEY = os.getenv("BLOXLINK_API_KEY")
+GUILD_ID = os.getenv("GUILD_ID")
+ROBLOX_OPEN_CLOUD = os.getenv("ROBLOX_OPEN_CLOUD_KEY")
 FRENCH_MAIN_GROUP_ID = os.getenv("FRENCH_GROUP_ID", "5610765")
-CAV_GROUP_ID         = os.getenv("CAV_GROUP_ID", "195387641")
+CAV_GROUP_ID = os.getenv("CAV_GROUP_ID", "195387641")
 
 GOOGLE_SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "credentials.json")
 
 FRENCH_SPREADSHEET_ID = os.getenv("FRENCH_SPREADSHEET_ID")
-CAV_SPREADSHEET_ID    = os.getenv("CAV_SPREADSHEET_ID")
+CAV_SPREADSHEET_ID = os.getenv("CAV_SPREADSHEET_ID")
 
 def _oc_headers() -> dict:
     return {"x-api-key": ROBLOX_OPEN_CLOUD, "Content-Type": "application/json"}
@@ -865,8 +865,8 @@ async def resolve_roblox_user(discord_id: str) -> dict | None:
     username = await roblox_get_username(roblox_id)
     if not username:
         return {"roblox_id": roblox_id, "roblox_username": f"Unknown ({roblox_id})"}
-    guild         = bot.get_guild(int(GUILD_ID))
-    discord_mbr   = guild.get_member(int(discord_id)) if guild else None
+    guild = bot.get_guild(int(GUILD_ID))
+    discord_mbr = guild.get_member(int(discord_id)) if guild else None
     await cache_user(discord_id, roblox_id, username, str(discord_mbr) if discord_mbr else "")
     return {"roblox_id": roblox_id, "roblox_username": username}
 
@@ -994,13 +994,13 @@ def sheet_load_medals() -> dict[str, set[str]]:
                         continue
 
                     # Build the lookup key exactly as the map expects: "{category} {tier}"
-                    category  = row[col_cat].strip() if len(row) > col_cat else ""
+                    category = row[col_cat].strip() if len(row) > col_cat else ""
                     award_val = row[col_val].strip()
                     if not award_val or not category:
                         continue
 
                     sheet_key = f"{category} {award_val}"
-                    mapped    = MEDAL_AWARD_MAP.get(sheet_key)
+                    mapped = MEDAL_AWARD_MAP.get(sheet_key)
 
                     if not mapped:
                         log.debug(
@@ -1027,12 +1027,12 @@ def sheet_load_venerations() -> dict[str, set[str]]:
     result: dict[str, set[str]] = {}
     for ws in _get_worksheets("Venerations"):
         try:
-            rows    = ws.get_all_values()
+            rows = ws.get_all_values()
             headers = rows[0] if rows else []
             # Locate columns by name, falling back to known indices if needed
-            col_p  = next((i for i, h in enumerate(headers) if h.strip().lower() == "profile link"), 6)
-            col_r  = next((i for i, h in enumerate(headers) if h.strip() == "Rank"), 8)
-            col_s  = next((i for i, h in enumerate(headers) if h.strip() == "Status"), 9)
+            col_p = next((i for i, h in enumerate(headers) if h.strip().lower() == "profile link"), 6)
+            col_r = next((i for i, h in enumerate(headers) if h.strip() == "Rank"), 8)
+            col_s = next((i for i, h in enumerate(headers) if h.strip() == "Status"), 9)
             col_mc = next((i for i, h in enumerate(headers) if h.strip() == "Manually Closed"), -1)
             for row in rows[1:]:
                 if len(row) <= max(col_p, col_r, col_s):
@@ -1042,7 +1042,7 @@ def sheet_load_venerations() -> dict[str, set[str]]:
                 if not m:
                     continue
                 roblox_id = m.group(1)
-                status    = row[col_s].strip().lower()
+                status = row[col_s].strip().lower()
                 if col_mc >= 0 and len(row) > col_mc:
                     mc = str(row[col_mc]).strip().lower()
                     if mc in ("true", "1", "yes"):
@@ -1066,15 +1066,15 @@ def sheet_load_nobility() -> tuple[dict[str, set[str]], dict[str, str]]:
 
     Keyed by Roblox ID extracted from the Profile Link column (col G, index 6).
     """
-    role_result:   dict[str, set[str]] = {}
-    prefix_result: dict[str, str]      = {}
+    role_result: dict[str, set[str]] = {}
+    prefix_result: dict[str, str] = {}
     for ws in _get_worksheets("Nobility"):
         try:
-            rows    = ws.get_all_values()
+            rows = ws.get_all_values()
             headers = rows[0] if rows else []
-            col_p   = next((i for i, h in enumerate(headers) if h.strip().lower() == "profile link"), 6)
-            col_g   = _col(headers, " ")        # sheet's grade/class column has a space header
-            col_s   = _col(headers, "Stage")
+            col_p = next((i for i, h in enumerate(headers) if h.strip().lower() == "profile link"), 6)
+            col_g = _col(headers, " ")        # sheet's grade/class column has a space header
+            col_s = _col(headers, "Stage")
             for row in rows[1:]:
                 if len(row) <= max(col_p, col_g, col_s):
                     continue
@@ -1083,8 +1083,8 @@ def sheet_load_nobility() -> tuple[dict[str, set[str]], dict[str, str]]:
                 if not m:
                     continue
                 roblox_id = m.group(1)
-                grade     = row[col_g].strip()
-                stage     = row[col_s].strip().lower()
+                grade = row[col_g].strip()
+                stage = row[col_s].strip().lower()
                 if not roblox_id or stage != "approved":
                     continue
                 entry = NOBILITY_ROLE_MAP.get(grade)
@@ -1105,14 +1105,14 @@ def sheet_load_nobility() -> tuple[dict[str, set[str]], dict[str, str]]:
     return role_result, prefix_result
 
 def sheet_load_all() -> tuple[
-    dict[str, set[str]],   # medals    {username_lower → {discord_role, …}}
-    dict[str, set[str]],   # venerations
-    dict[str, set[str]],   # nobility roles
-    dict[str, str],        # nobility nick prefixes
+    dict[str, set[str]], # medals    {username_lower → {discord_role, …}}
+    dict[str, set[str]], # venerations
+    dict[str, set[str]], # nobility roles
+    dict[str, str], # nobility nick prefixes
 ]:
     """Load all three active tabs from the French medals spreadsheet."""
-    medals               = sheet_load_medals()
-    venerations          = sheet_load_venerations()
+    medals = sheet_load_medals()
+    venerations = sheet_load_venerations()
     nobility_r, nobility_p = sheet_load_nobility()
     return medals, venerations, nobility_r, nobility_p
 
@@ -1163,9 +1163,9 @@ def categorise_groups(groups: list[dict]) -> tuple[list[str], list[str], list[st
     french, coalition, neutral = [], [], []
     for g in groups:
         gid, rank = g["id"], g["rank"]
-        if gid in FRENCH_GROUP_IDS:       french.append(f"{FRENCH_GROUP_IDS[gid]} — {rank}")
-        elif gid in COALITION_GROUP_IDS:  coalition.append(f"{COALITION_GROUP_IDS[gid]} — {rank}")
-        elif gid in NEUTRAL_GROUP_IDS:    neutral.append(f"{NEUTRAL_GROUP_IDS[gid]} — {rank}")
+        if gid in FRENCH_GROUP_IDS: french.append(f"{FRENCH_GROUP_IDS[gid]} — {rank}")
+        elif gid in COALITION_GROUP_IDS: coalition.append(f"{COALITION_GROUP_IDS[gid]} — {rank}")
+        elif gid in NEUTRAL_GROUP_IDS: neutral.append(f"{NEUTRAL_GROUP_IDS[gid]} — {rank}")
     return french, coalition, neutral
 
 def truncate_field(lines: list[str], limit: int = 1020) -> str:
@@ -1273,7 +1273,7 @@ async def _blacklist_member(
         roblox_id, username = "Unknown", "Unknown"
         if roblox:
             roblox_id = roblox.get("roblox_id", "Unknown")
-            username  = roblox.get("roblox_username", "Unknown")
+            username = roblox.get("roblox_username", "Unknown")
             if roblox_id != "Unknown":
                 await roblox_kick_from_group(roblox_id, CAV_GROUP_ID)
 
@@ -1376,7 +1376,7 @@ async def background_check(interaction: discord.Interaction, users: str):
             if isinstance(avatar_url, Exception): avatar_url = None
 
             username = user_info.get("name") or roblox["roblox_username"]
-            groups   = all_groups if isinstance(all_groups, list) else []
+            groups = all_groups if isinstance(all_groups, list) else []
 
             french_rank = cav_rank = "Not a member"
             for g in groups:
@@ -1422,7 +1422,7 @@ async def background_check(interaction: discord.Interaction, users: str):
                 embed.set_thumbnail(url=avatar_url)
             embed.add_field(name="Account", value=f"<@{discord_id}>, {username}", inline=False)
             embed.add_field(name="Account Age", value=user_info.get("account_age", "Unknown"), inline=True)
-            embed.add_field(name="Prev. Usernames", value=prev_names,  inline=True)
+            embed.add_field(name="Prev. Usernames", value=prev_names, inline=True)
             embed.add_field(name="Nobility", value=nobility_text, inline=False)
             embed.add_field(
                 name="French Rankings",
@@ -1637,9 +1637,9 @@ async def purge(interaction: discord.Interaction, users: str):
                     await interaction.followup.send(embed=err_embed)
                     continue
 
-            roblox     = await resolve_roblox_user(str(discord_id))
-            roblox_id  = roblox["roblox_id"]  if roblox else None
-            username   = roblox["roblox_username"] if roblox else None
+            roblox = await resolve_roblox_user(str(discord_id))
+            roblox_id = roblox["roblox_id"]  if roblox else None
+            username = roblox["roblox_username"] if roblox else None
             avatar_url = await roblox_get_avatar_url(roblox_id) if roblox_id else None
 
             embed = discord.Embed(
@@ -1969,7 +1969,6 @@ async def medal_sync(interaction: discord.Interaction, users: str):
 
     print(f"[MEDAL-SYNC] All done — results sent to Discord.")
     log.info(f"[MEDAL-SYNC] Run complete by {interaction.user}")
-# ============================================================
 
 class PromoteTypeSelect(discord.ui.Select):
     def __init__(self):
@@ -2014,8 +2013,8 @@ class BrigadeSelect(discord.ui.Select):
 class SingleSelectView(discord.ui.View):
     def __init__(self, select: discord.ui.Select, timeout: int = 60):
         super().__init__(timeout=timeout)
-        self.promo_type:     str | None = None
-        self.target_rank:    str | None = None
+        self.promo_type: str | None = None
+        self.target_rank: str | None = None
         self.target_brigade: str | None = None
         self.add_item(select)
 
