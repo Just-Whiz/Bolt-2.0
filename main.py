@@ -613,10 +613,10 @@ async def cache_user(discord_id: str, roblox_id: str, username: str, discord_use
 async def roblox_get_user_info(roblox_id: str) -> dict:
     async with ROBLOX_SEMAPHORE:
         try:
-            async with httpx.AsyncClient(timeout=15) as s:
-                r = await s.get(f"https://users.roblox.com/v1/users/{roblox_id}")
+            async with httpx.AsyncClient(timeout=15) as client:
+                r = await client.get(f"https://users.roblox.com/v1/users/{roblox_id}")
                 if r.status_code != 200:
-                    print(f"[ROBLOX] roblox_get_user_info {roblox_id} HTTP {r.status_code}")
+                    print(f"[ROBLOX] roblox_get_user_info {roblox_id} HTTP {r.status_code}: {r.text[:100]}")
                     return {}
                 data = r.json()
         except Exception as e:
