@@ -249,9 +249,9 @@ DISCORD_RANKS: list[str] = [
 ]
 
 DISCORD_RANK_INDEX: dict[str, int] = {name: i for i, name in enumerate(DISCORD_RANKS)}
-ALL_RANK_ROLES:     set[str]       = set(DISCORD_RANKS)
-DRAFT_RESET_RANK                   = "Cavalier"
-SENIOR_THRESHOLD                   = DISCORD_RANKS.index("Marechal des Logis-Chef")
+ALL_RANK_ROLES: set[str] = set(DISCORD_RANKS)
+DRAFT_RESET_RANK = "Cavalier"
+SENIOR_THRESHOLD = DISCORD_RANKS.index("Marechal des Logis-Chef")
 
 SENIOR_PROMOTER_ROLES: set[str] = {
     "Administration Team",
@@ -536,34 +536,52 @@ PURGE_ROLES: set[str] = (
        "Citoyen", "Soldat", "Caporal", "Caporal Fourrier"}
 )
 
-ADMISSIONS_BLACKLIST_ROLE = "Admissions Blacklisted"
+ADMISSIONS_BLACKLIST_ROLE = "Admissions Blacklist"
 
 # ============================================================
 #  COMMAND PERMISSIONS
 # ============================================================
 
 _STAFF_ROLES: set[str] = {
+    "Head of Recruitment"
     "Administration Team",
     "Head of Administration",
-    "Head of Recruitment",
+    "Cavalerie Petit État-major"
     "26ème État-major",
     "7ème État-major",
     "5ème État-major",
     "GaC État-major",
     "Adjudant Sous-Officier",
-    "Cavalerie État-major",
+    "Lieutenant en Second",
+    "Lieutenant en Premier",
+    "Capitaine",
+    "Chef d'Escadron",
+    "Major",
+    "Colonel",
+    "Adjudant-Commandant",
+    "Adjoint du Corps",
+    "Adjoint du Général de Division",
+    "Adjoint du Général de Brigade",
+    "Adjoint du Maréchal",
     "Adjoint d'État Major",
-    "Super Admin",
+    "Commandant de Cavalerie Brigade",
+    "Cavalerie État-major",
     "Admin",
+    "Géneral de Brigade",
+    "Général de Division",
+    "Maréchal",
+    "Maréchal en Major Général",
+    "Napoléon",
+    "Super Admin",
 }
 
 COMMAND_PERMISSIONS: dict[str, set[str]] = {
-    "background-check": {"Recruitment Team"} | _STAFF_ROLES,
-    "induct":           {"Recruitment Team"} | _STAFF_ROLES,
-    "purge":            _STAFF_ROLES,
-    "promote":          _STAFF_ROLES,
-    "medal-sync":       _STAFF_ROLES,
-    "export-rosters":   _STAFF_ROLES,
+    "background-check": {"@everyone"},
+    "induct": {"Recruitment Team"} | _STAFF_ROLES,
+    "purge": _STAFF_ROLES,
+    "promote": _STAFF_ROLES,
+    "medal-sync": _STAFF_ROLES,
+    "export-rosters": _STAFF_ROLES,
 }
 
 # ============================================================
@@ -598,10 +616,10 @@ def get_cached_user(discord_id: str) -> dict | None:
 
 async def cache_user(discord_id: str, roblox_id: str, username: str, discord_username: str = "") -> None:
     verified_cache[str(discord_id)] = {
-        "roblox_id":        str(roblox_id),
-        "roblox_username":  username,
+        "roblox_id": str(roblox_id),
+        "roblox_username": username,
         "discord_username": discord_username,
-        "cached_at":        datetime.now(timezone.utc).isoformat(),
+        "cached_at": datetime.now(timezone.utc).isoformat(),
     }
     await _save_cache()
     log.info(f"[CACHE] Cached {discord_id} → {username}")
@@ -625,17 +643,17 @@ async def roblox_get_user_info(roblox_id: str) -> dict:
     account_age, created_str = "Unknown", data.get("created", "")
     if created_str:
         try:
-            dt    = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
+            dt = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
             delta = datetime.now(timezone.utc) - dt
             y, m, d = delta.days // 365, (delta.days % 365) // 30, delta.days % 30
             account_age = f"{y} years, {m} months, {d} days"
         except Exception:
             pass
     return {
-        "name":         data.get("name", ""),
+        "name": data.get("name", ""),
         "display_name": data.get("displayName", ""),
-        "account_age":  account_age,
-        "created":      created_str,
+        "account_age": account_age,
+        "created": created_str,
     }
 
 async def roblox_get_username(roblox_id: str) -> str | None:
@@ -772,32 +790,51 @@ async def roblox_set_rank(roblox_id: str, group_id: str, rank_name: str) -> bool
             return False
 
 async def roblox_kick_from_group(roblox_id: str, group_id: str) -> bool:
+    """Method 1: Plain kick (Exile) via Open Cloud v1 API."""
     if not ROBLOX_OPEN_CLOUD:
         return False
     async with ROBLOX_SEMAPHORE:
         try:
-            async with httpx.AsyncClient(timeout=15) as s:
-                r = await s.get(
-                    f"https://roblox-proxy.christiansuy25.workers.dev/apis/cloud/v2/groups/{group_id}/memberships",
-                    headers=_oc_headers(),
-                    params={"filter": f"user == 'users/{roblox_id}'"},
-                )
-                if r.status_code != 200:
-                    return False
-                memberships = r.json().get("groupMemberships", [])
-                if not memberships:
-                    return False
-                path = memberships[0]["path"]
-                r = await s.delete(
-                    f"https://roblox-proxy.christiansuy25.workers.dev/apis/cloud/v2/{path}",
-                    headers=_oc_headers(),
-                )
-                success = r.status_code in (200, 204)
-                if success:
-                    log.info(f"[ROBLOX] Kicked {roblox_id} from {group_id}")
-                return success
+            # Open Cloud v1 endpoint to remove/delete a membership
+            url = f"https://apis.roblox.com/cloud/v1/groups/{group_id}/memberships/{roblox_id}"
+            async with httpx.AsyncClient(timeout=15) as client:
+                r = await client.delete(url, headers=_oc_headers())
+            
+            success = r.status_code in (200, 204)
+            if success:
+                log.info(f"[ROBLOX] Kicked user {roblox_id} from group {group_id}")
+            else:
+                log.error(f"[ROBLOX] Kick failed for {roblox_id}: {r.status_code} - {r.text}")
+            return success
         except Exception as e:
             print(f"[ROBLOX] kick_from_group error: {e!r}")
+            return False
+
+async def roblox_ban_from_group(roblox_id: str, group_id: str, reason: str = "Purged and Blacklisted") -> bool:
+    """Method 1: Hard ban user from the Roblox group via Open Cloud v1 API."""
+    if not ROBLOX_OPEN_CLOUD:
+        return False
+    async with ROBLOX_SEMAPHORE:
+        try:
+            # Open Cloud v1 endpoint to create a group ban configuration
+            url = f"https://apis.roblox.com/cloud/v1/groups/{group_id}/bans"
+            payload = {
+                "user": f"users/{roblox_id}",
+                "displayReason": reason,
+                "privateReason": "Action executed automatically via Bolt 2.0 /purge command.",
+                "deleteMessages": True  # Clean up wall posts
+            }
+            async with httpx.AsyncClient(timeout=15) as client:
+                r = await client.post(url, headers=_oc_headers(), json=payload)
+                
+            success = r.status_code in (200, 201)
+            if success:
+                log.info(f"[ROBLOX] Banned user {roblox_id} from group {group_id}")
+            else:
+                log.error(f"[ROBLOX] Ban failed for {roblox_id}: {r.status_code} - {r.text}")
+            return success
+        except Exception as e:
+            print(f"[ROBLOX] ban_from_group error: {e!r}")
             return False
 
 # ============================================================
@@ -1383,18 +1420,18 @@ async def background_check(interaction: discord.Interaction, users: str):
             embed = discord.Embed(title="Background Check Results", color=discord.Color.dark_blue())
             if avatar_url:
                 embed.set_thumbnail(url=avatar_url)
-            embed.add_field(name="Account",         value=f"<@{discord_id}>, {username}", inline=False)
-            embed.add_field(name="Account Age",     value=user_info.get("account_age", "Unknown"), inline=True)
+            embed.add_field(name="Account", value=f"<@{discord_id}>, {username}", inline=False)
+            embed.add_field(name="Account Age", value=user_info.get("account_age", "Unknown"), inline=True)
             embed.add_field(name="Prev. Usernames", value=prev_names,  inline=True)
-            embed.add_field(name="Nobility",        value=nobility_text, inline=False)
+            embed.add_field(name="Nobility", value=nobility_text, inline=False)
             embed.add_field(
                 name="French Rankings",
                 value=f"Empire Français — {french_rank}\nCorps de Cavalerie — {cav_rank}",
                 inline=False,
             )
-            embed.add_field(name=f"🇫🇷 French Empire & Clients ({len(french)})",  value=truncate_field(french),    inline=False)
-            embed.add_field(name=f"⚔️ Coalition Powers ({len(coalition)})",        value=truncate_field(coalition), inline=False)
-            embed.add_field(name=f"🌐 Neutral Powers ({len(neutral)})",            value=truncate_field(neutral),   inline=False)
+            embed.add_field(name=f"🇫🇷 French Empire & Clients ({len(french)})", value=truncate_field(french), inline=False)
+            embed.add_field(name=f"⚔️ Coalition Powers ({len(coalition)})", value=truncate_field(coalition), inline=False)
+            embed.add_field(name=f"🌐 Neutral Powers ({len(neutral)})", value=truncate_field(neutral), inline=False)
             embed.set_footer(text=f"Roblox ID: {roblox_id} • roblox.com/users/{roblox_id}/profile")
             await interaction.followup.send(embed=embed)
             log.info(f"[BG-CHECK] {username} ({roblox_id}) checked by {interaction.user}")
@@ -1416,21 +1453,35 @@ async def induct(interaction: discord.Interaction, users: str):
     await interaction.response.defer()
 
     for discord_id in parse_mentions(users):
-        lines = ["**Induct Results**"]
         try:
             member = interaction.guild.get_member(discord_id)
             if not member:
                 member = await asyncio.wait_for(interaction.guild.fetch_member(discord_id), timeout=10)
-            lines.append(f"<@{discord_id}> — {member.display_name}")
 
             roblox = await resolve_roblox_user(str(discord_id))
             if not roblox:
-                lines.append("❌ Not verified with Bloxlink. Aborted.")
-                await interaction.followup.send("\n".join(lines))
+                err_embed = discord.Embed(
+                    title="Induction Failed",
+                    description=f"<@{discord_id}> is not verified with Bloxlink. Aborted.",
+                    color=discord.Color.red(),
+                )
+                await interaction.followup.send(embed=err_embed)
                 continue
 
-            roblox_id = roblox["roblox_id"]
-            username  = roblox["roblox_username"]
+            roblox_id  = roblox["roblox_id"]
+            username   = roblox["roblox_username"]
+            avatar_url = await roblox_get_avatar_url(roblox_id)
+
+            embed = discord.Embed(
+                title="Induction Results",
+                color=discord.Color.dark_blue(),
+            )
+            embed.set_author(name=f"{member.display_name} ({username})", icon_url=member.display_avatar.url)
+            if avatar_url:
+                embed.set_thumbnail(url=avatar_url)
+            embed.add_field(name="Discord", value=f"<@{discord_id}>", inline=True)
+            embed.add_field(name="Roblox", value=username, inline=True)
+            status_lines: list[str] = []
 
             cav_rank = await roblox_get_group_rank(roblox_id, CAV_GROUP_ID)
             if not cav_rank or cav_rank.lower() == "guest":
@@ -1438,34 +1489,39 @@ async def induct(interaction: discord.Interaction, users: str):
                     roblox_accept_join_request(roblox_id, CAV_GROUP_ID), timeout=15
                 )
                 if accepted:
-                    lines.append("✅ Accepted into Corps de Cavalerie Impériale.")
+                    status_lines.append("✅ Accepted into Corps de Cavalerie Impériale.")
                 else:
-                    lines.append("❌ No pending join request. Ask them to send one first. Aborted.")
-                    await interaction.followup.send("\n".join(lines))
+                    status_lines.append("❌ No pending join request. Ask them to send one first. Aborted.")
+                    embed.add_field(name="Status", value="\n".join(status_lines), inline=False)
+                    embed.color = discord.Color.red()
+                    embed.set_footer(text=f"Roblox ID: {roblox_id}")
+                    await interaction.followup.send(embed=embed)
                     continue
             else:
-                lines.append(f"⚠️ Already in Cav group as {cav_rank}.")
+                status_lines.append(f"⚠️ Already in Cav group as **{cav_rank}**.")
 
             if cav_rank and cav_rank.lower() == CAV_INDUCT_ROBLOX_RANK.lower():
-                lines.append(f"⚠️ Already ranked {CAV_INDUCT_ROBLOX_RANK}.")
+                status_lines.append(f"⚠️ Already ranked **{CAV_INDUCT_ROBLOX_RANK}** in Roblox.")
             else:
                 try:
                     ranked = await asyncio.wait_for(
                         roblox_set_rank(roblox_id, CAV_GROUP_ID, CAV_INDUCT_ROBLOX_RANK), timeout=30,
                     )
-                    lines.append(f"✅ Ranked to {CAV_INDUCT_ROBLOX_RANK}." if ranked
-                                 else "❌ Failed to set Roblox rank — set manually.")
+                    status_lines.append(
+                        f"✅ Ranked to **{CAV_INDUCT_ROBLOX_RANK}**." if ranked
+                        else "❌ Failed to set Roblox rank — set manually."
+                    )
                 except asyncio.TimeoutError:
-                    lines.append("⚠️ Roblox rank request timed out — set manually.")
+                    status_lines.append("⚠️ Roblox rank request timed out — set manually.")
 
-            guild    = interaction.guild
+            guild = interaction.guild
             stripped = []
             for name in INDUCT_REMOVE:
                 role = discord.utils.get(guild.roles, name=name)
                 if role and role in member.roles:
                     await member.remove_roles(role)
                     stripped.append(name)
-            lines.append(f"✅ Stripped: {', '.join(stripped)}" if stripped else "⚠️ No roles to strip.")
+            status_lines.append(f"✅ Stripped: {', '.join(stripped)}" if stripped else "⚠️ No roles to strip.")
 
             added, missing = [], []
             for name in INDUCT_ADD:
@@ -1476,119 +1532,233 @@ async def induct(interaction: discord.Interaction, users: str):
                     added.append(name)
                 else:
                     missing.append(name)
-            if added:   lines.append(f"✅ Added: {', '.join(added)}")
-            if missing: lines.append(f"❌ Not found in server: {', '.join(missing)}")
+            if added:   status_lines.append(f"✅ Added: {', '.join(added)}")
+            if missing: status_lines.append(f"❌ Not found in server: {', '.join(missing)}")
 
             new_nick = f"[26e] {username}"
             try:
                 await member.edit(nick=new_nick)
-                lines.append(f"✅ Nickname → {new_nick}")
+                status_lines.append(f"✅ Nickname → **{new_nick}**")
             except discord.Forbidden:
-                lines.append("⚠️ Cannot change nickname (bot role too low or server owner).")
+                status_lines.append("⚠️ Cannot change nickname (bot role too low or server owner).")
             except discord.HTTPException as e:
-                lines.append(f"⚠️ Nickname failed: {e.text}")
+                status_lines.append(f"⚠️ Nickname failed: {e.text}")
 
+            embed.add_field(name="Actions", value="\n".join(status_lines), inline=False)
+            embed.set_footer(text=f"Inducted by {interaction.user} • Roblox ID: {roblox_id}")
             log.info(f"[INDUCT] {username} inducted by {interaction.user}")
 
         except asyncio.TimeoutError:
-            lines.append("❌ A request timed out.")
+            embed = discord.Embed(
+                title="Induction Failed",
+                description=f"❌ A request timed out for <@{discord_id}>.",
+                color=discord.Color.red(),
+            )
         except Exception as e:
-            lines.append(f"❌ Unexpected error: {type(e).__name__}: {e}")
+            embed = discord.Embed(
+                title="Induction Error",
+                description=f"❌ Unexpected error for <@{discord_id}>: `{type(e).__name__}: {e}`",
+                color=discord.Color.red(),
+            )
             log.error(f"[INDUCT] Error for {discord_id}: {e}")
 
-        await interaction.followup.send("\n".join(lines))
+        await interaction.followup.send(embed=embed)
 
 # ============================================================
 #  /purge
 # ============================================================
 
-@bot.tree.command(name="purge", description="Strip all roles, kick from Roblox group, and reset nickname.")
+class PurgeActionSelect(discord.ui.Select):
+    def __init__(self):
+        super().__init__(
+            placeholder="Choose purge action…", min_values=1, max_values=1,
+            options=[
+                discord.SelectOption(
+                    label="Remove Only",
+                    value="remove",
+                    description="Strip all roles and kick from Roblox group — no blacklist",
+                ),
+                discord.SelectOption(
+                    label="Remove & Blacklist",
+                    value="blacklist",
+                    description="Strip roles, kick from group, AND add Admissions Blacklist role",
+                ),
+            ],
+        )
+    async def callback(self, interaction: discord.Interaction):
+        self.view.action = self.values[0]
+        await interaction.response.defer()
+        self.view.stop()
+
+class PurgeActionView(discord.ui.View):
+    def __init__(self, timeout: int = 60):
+        super().__init__(timeout=timeout)
+        self.action: str | None = None
+        self.add_item(PurgeActionSelect())
+
+@bot.tree.command(name="purge", description="Strip all roles, kick from Roblox group, and optionally blacklist.")
 @app_commands.describe(users="Mention one or more users to purge")
 async def purge(interaction: discord.Interaction, users: str):
     if not has_command_permission(interaction, "purge"):
         await interaction.response.send_message("❌ You don't have permission.", ephemeral=True)
         return
-    await interaction.response.defer()
 
     mentions = parse_mentions(users)
     if not mentions:
-        await interaction.followup.send("❌ No valid members mentioned.")
+        await interaction.response.send_message("❌ No valid members mentioned.", ephemeral=True)
         return
 
-    all_results = []
+    action_view = PurgeActionView()
+    await interaction.response.send_message(
+        "**Purge:** Choose what to do with the selected member(s):",
+        view=action_view,
+        ephemeral=True,
+    )
+    await action_view.wait()
+    if action_view.action is None:
+        await interaction.edit_original_response(content="⏱️ Timed out.", view=None)
+        return
+
+    do_blacklist = action_view.action == "blacklist"
+    await interaction.edit_original_response(content="⏳ Processing…", view=None)
 
     for discord_id in mentions:
-        lines = [f"**Purge Results for <@{discord_id}>:**"]
         try:
             member = interaction.guild.get_member(discord_id)
             if not member:
                 try:
                     member = await asyncio.wait_for(interaction.guild.fetch_member(discord_id), timeout=10)
                 except Exception:
-                    lines.append(f"❌ Could not find Discord member.")
-                    all_results.append("\n".join(lines))
+                    err_embed = discord.Embed(
+                        title="Purge Failed",
+                        description=f"❌ Could not find Discord member <@{discord_id}>.",
+                        color=discord.Color.red(),
+                    )
+                    await interaction.followup.send(embed=err_embed)
                     continue
 
-            roblox = await resolve_roblox_user(str(discord_id))
-            if not roblox:
-                lines.append("⚠️ Not verified with Bloxlink — skipping Roblox kick.")
-            else:
-                roblox_id = roblox["roblox_id"]
-                cav_rank  = await roblox_get_group_rank(roblox_id, CAV_GROUP_ID)
-                if not cav_rank:
-                    lines.append("⚠️ Not in Cav Roblox group — skipping kick.")
-                else:
-                    kicked = await asyncio.wait_for(
-                        roblox_kick_from_group(roblox_id, CAV_GROUP_ID), timeout=15
-                    )
-                    lines.append("✅ Kicked from Corps de Cavalerie Impériale (Roblox)." if kicked
-                                 else "❌ Failed to kick from Roblox group — remove manually.")
+            roblox     = await resolve_roblox_user(str(discord_id))
+            roblox_id  = roblox["roblox_id"]  if roblox else None
+            username   = roblox["roblox_username"] if roblox else None
+            avatar_url = await roblox_get_avatar_url(roblox_id) if roblox_id else None
 
+            embed = discord.Embed(
+                title="Remove & Blacklist" if do_blacklist else "Remove",
+                color=discord.Color.dark_red() if do_blacklist else discord.Color.orange(),
+            )
+            embed.set_author(
+                name=f"{member.display_name}{' (' + username + ')' if username else ''}",
+                icon_url=member.display_avatar.url,
+            )
+            if avatar_url:
+                embed.set_thumbnail(url=avatar_url)
+            embed.add_field(name="Discord", value=f"<@{discord_id}>", inline=True)
+            if username:
+                embed.add_field(name="Roblox", value=username, inline=True)
+
+            status_lines: list[str] = []
+
+            # ── Roblox Action (Kick vs Ban) ──────────────────────────────────
+            if not roblox:
+                status_lines.append("⚠️ Not verified with Bloxlink — skipping Roblox action.")
+            else:
+                cav_rank = await roblox_get_group_rank(roblox_id, CAV_GROUP_ID)
+                if not cav_rank:
+                    status_lines.append("⚠️ Not in Cav Roblox group — skipping Roblox action.")
+                else:
+                    if do_blacklist:
+                        # Blacklist option chosen: Execute an Open Cloud API Ban
+                        processed = await asyncio.wait_for(
+                            roblox_ban_from_group(roblox_id, CAV_GROUP_ID, reason="Purged & Blacklisted"),
+                            timeout=15
+                        )
+                        status_lines.append(
+                            "✅ Permanently BANNED from Corps de Cavalerie Impériale (Roblox)." if processed 
+                            else "❌ Failed to ban from Roblox group — handle manually."
+                        )
+                    else:
+                        # Remove Only option chosen: Execute an Open Cloud API Kick (Exile)
+                        processed = await asyncio.wait_for(
+                            roblox_kick_from_group(roblox_id, CAV_GROUP_ID),
+                            timeout=15
+                        )
+                        status_lines.append(
+                            "✅ Kicked from Corps de Cavalerie Impériale (Roblox)." if processed 
+                            else "❌ Failed to kick from Roblox group — remove manually."
+                        )
+
+            # ── Discord role strip ───────────────────────────────────────────
             stripped = []
             for name in PURGE_ROLES:
                 role = discord.utils.get(interaction.guild.roles, name=name)
                 if role and role in member.roles:
                     await member.remove_roles(role)
                     stripped.append(name)
-            lines.append(f"✅ Stripped: {', '.join(stripped)}" if stripped
-                         else "⚠️ No matching roles found to strip.")
+            status_lines.append(
+                f"✅ Stripped {len(stripped)} role(s)." if stripped
+                else "⚠️ No matching roles found to strip."
+            )
 
-            bl_role = discord.utils.get(interaction.guild.roles, name=ADMISSIONS_BLACKLIST_ROLE)
-            if bl_role:
-                if bl_role not in member.roles:
-                    try:
-                        await member.add_roles(bl_role, reason="Purged from regiment")
-                        lines.append(f"✅ Added **{ADMISSIONS_BLACKLIST_ROLE}**.")
-                    except discord.Forbidden:
-                        lines.append(f"⚠️ Could not add **{ADMISSIONS_BLACKLIST_ROLE}** — check bot role hierarchy.")
+            # ── Optional blacklist ───────────────────────────────────────────
+            if do_blacklist:
+                bl_role = discord.utils.get(interaction.guild.roles, name=ADMISSIONS_BLACKLIST_ROLE)
+                if bl_role:
+                    if bl_role not in member.roles:
+                        try:
+                            await member.add_roles(bl_role, reason="Purged & blacklisted")
+                            status_lines.append(f"✅ Added **{ADMISSIONS_BLACKLIST_ROLE}**.")
+                        except discord.Forbidden:
+                            status_lines.append(f"⚠️ Could not add **{ADMISSIONS_BLACKLIST_ROLE}** — check bot role hierarchy.")
+                    else:
+                        status_lines.append(f"⚠️ **{ADMISSIONS_BLACKLIST_ROLE}** already applied.")
+                    # Write to spreadsheet
+                    if sheets_client and roblox_id:
+                        loop = asyncio.get_event_loop()
+                        await loop.run_in_executor(
+                            None,
+                            append_to_blacklisted_sheet,
+                            username or "Unknown",
+                            roblox_id,
+                            str(discord_id),
+                            member.display_name,
+                        )
+                        status_lines.append("✅ Logged to Blacklisted spreadsheet.")
+                else:
+                    status_lines.append(f"⚠️ **{ADMISSIONS_BLACKLIST_ROLE}** role not found in server.")
             else:
-                lines.append(f"⚠️ **{ADMISSIONS_BLACKLIST_ROLE}** role not found in server.")
+                status_lines.append("ℹ️ Blacklist skipped (Remove Only mode).")
 
+            # ── Nickname reset ───────────────────────────────────────────────
             try:
                 await member.edit(nick=None)
-                lines.append("✅ Nickname reset.")
+                status_lines.append("✅ Nickname reset.")
             except discord.Forbidden:
-                lines.append("⚠️ Cannot reset nickname (bot role too low or server owner).")
+                status_lines.append("⚠️ Cannot reset nickname (bot role too low or server owner).")
             except discord.HTTPException as e:
-                lines.append(f"⚠️ Nickname reset failed: {e.text}")
+                status_lines.append(f"⚠️ Nickname reset failed: {e.text}")
 
-            log.info(f"[PURGE] {member} purged by {interaction.user}")
+            embed.add_field(name="Actions", value="\n".join(status_lines), inline=False)
+            embed.set_footer(
+                text=f"Purged by {interaction.user}"
+                     + (f" • Roblox ID: {roblox_id}" if roblox_id else "")
+            )
+            log.info(f"[PURGE] {member} purged (blacklist={do_blacklist}) by {interaction.user}")
 
         except asyncio.TimeoutError:
-            lines.append("❌ A request timed out.")
+            embed = discord.Embed(
+                title="Purge Failed",
+                description=f"❌ A request timed out for <@{discord_id}>.",
+                color=discord.Color.red(),
+            )
         except Exception as e:
-            lines.append(f"❌ Unexpected error: {type(e).__name__}: {e}")
+            embed = discord.Embed(
+                title="Purge Error",
+                description=f"❌ Unexpected error for <@{discord_id}>: `{type(e).__name__}: {e}`",
+                color=discord.Color.red(),
+            )
             log.error(f"[PURGE] Error for {discord_id}: {e}")
 
-        all_results.append("\n".join(lines))
-
-    response_text = "\n\n".join(all_results)
-    if not response_text:
-        await interaction.followup.send("⚠️ No actions were taken.")
-        return
-        
-    for i in range(0, len(response_text), 1900):
-        await interaction.followup.send(response_text[i:i+1900])
+        await interaction.followup.send(embed=embed)
 
 # ============================================================
 #  /medal-sync
@@ -1646,8 +1816,6 @@ async def medal_sync(interaction: discord.Interaction, users: str):
         f"venerations:{len(veneration_data)} nobility:{len(nobility_roles)}"
     )
 
-    all_results: list[str] = []
-
     for discord_id in mentions:
         member = interaction.guild.get_member(discord_id)
         if not member:
@@ -1656,23 +1824,33 @@ async def medal_sync(interaction: discord.Interaction, users: str):
                     interaction.guild.fetch_member(discord_id), timeout=10
                 )
             except Exception:
-                msg = f"❌ <@{discord_id}> — could not find in server."
-                print(f"[MEDAL-SYNC] {msg}")
+                err_embed = discord.Embed(
+                    title="Medal Sync Failed",
+                    description=f"❌ <@{discord_id}> — could not find in server.",
+                    color=discord.Color.red(),
+                )
+                print(f"[MEDAL-SYNC] Member {discord_id} not found in guild.")
                 log.warning(f"[MEDAL-SYNC] Member {discord_id} not found in guild.")
-                all_results.append(msg)
+                await interaction.followup.send(embed=err_embed)
                 continue
 
         # Resolve Roblox username via Bloxlink / cache
         roblox = await resolve_roblox_user(str(discord_id))
         if not roblox:
-            msg = f"❌ <@{discord_id}> — not verified with Bloxlink, cannot look up spreadsheet."
-            print(f"[MEDAL-SYNC] {msg}")
+            err_embed = discord.Embed(
+                title="Medal Sync Failed",
+                description=f"❌ <@{discord_id}> is not verified with Bloxlink.",
+                color=discord.Color.red(),
+            )
+            err_embed.set_author(name=member.display_name, icon_url=member.display_avatar.url)
+            print(f"[MEDAL-SYNC] {member} has no Bloxlink verification.")
             log.warning(f"[MEDAL-SYNC] {member} has no Bloxlink verification.")
-            all_results.append(msg)
+            await interaction.followup.send(embed=err_embed)
             continue
 
         roblox_username: str = roblox["roblox_username"]
         roblox_id_key:   str = roblox["roblox_id"]
+        avatar_url = await roblox_get_avatar_url(roblox_id_key)
 
         print(
             f"[MEDAL-SYNC] Processing {member} (Roblox: {roblox_username}, ID: {roblox_id_key}) — "
@@ -1680,35 +1858,36 @@ async def medal_sync(interaction: discord.Interaction, users: str):
         )
         log.info(f"[MEDAL-SYNC] Processing {member} → Roblox '{roblox_username}' (id='{roblox_id_key}')")
 
-        lines: list[str] = [
-            f"**Medal Sync — {member.mention}** (Roblox: **{roblox_username}**)"
-        ]
+        embed = discord.Embed(
+            title="Medal Sync Results",
+            color=discord.Color.dark_blue(),
+        )
+        embed.set_author(name=f"{member.display_name} ({roblox_username})", icon_url=member.display_avatar.url)
+        if avatar_url:
+            embed.set_thumbnail(url=avatar_url)
+        embed.add_field(name="Discord", value=f"<@{discord_id}>", inline=True)
+        embed.add_field(name="Roblox", value=roblox_username, inline=True)
 
         # ── Helper: assign a single Discord role ────────────────────────────
         async def assign_role(role_name: str, source_tag: str) -> str:
-            """
-            Try to add `role_name` to `member`.
-            Returns a one-line status string for the embed.
-            """
             disc_role = discord.utils.get(interaction.guild.roles, name=role_name)
             if not disc_role:
-                msg = f"  ⚠️ [{source_tag}] Role **{role_name}** not found in server — create it first."
+                msg = f"⚠️ **{role_name}** — not found in server."
                 print(f"[MEDAL-SYNC]   MISSING ROLE: '{role_name}' ({source_tag}) for {roblox_username}")
                 log.warning(f"[MEDAL-SYNC] Role '{role_name}' ({source_tag}) not in guild for '{roblox_username}'")
                 return msg
             if disc_role in member.roles:
-                msg = f"  ✅ [{source_tag}] **{role_name}** — already assigned."
-                print(f"[MEDAL-SYNC]   ALREADY HAS: '{role_name}' ({source_tag})")
+                msg = f"✅ **{role_name}** — already assigned."
                 log.debug(f"[MEDAL-SYNC] '{roblox_username}' already has '{role_name}' ({source_tag})")
                 return msg
             try:
                 await member.add_roles(disc_role, reason=f"Medal sync ({source_tag})")
-                msg = f"  ✅ [{source_tag}] **{role_name}** — granted."
+                msg = f"✅ **{role_name}** — granted."
                 print(f"[MEDAL-SYNC]   GRANTED: '{role_name}' ({source_tag}) → {roblox_username}")
                 log.info(f"[MEDAL-SYNC] Granted '{role_name}' ({source_tag}) to '{roblox_username}'")
                 return msg
             except discord.Forbidden:
-                msg = f"  ❌ [{source_tag}] **{role_name}** — missing permissions to assign."
+                msg = f"❌ **{role_name}** — missing permissions."
                 print(f"[MEDAL-SYNC]   FORBIDDEN: '{role_name}' ({source_tag}) for {roblox_username}")
                 log.error(f"[MEDAL-SYNC] Forbidden assigning '{role_name}' ({source_tag}) to '{roblox_username}'")
                 return msg
@@ -1718,24 +1897,30 @@ async def medal_sync(interaction: discord.Interaction, users: str):
         if medal_roles:
             print(f"[MEDAL-SYNC]   MEDALS FOUND ({len(medal_roles)}): {medal_roles}")
             log.info(f"[MEDAL-SYNC] '{roblox_username}' medals from sheet: {medal_roles}")
-            lines.append(f"\n🎖️ **Medals** ({len(medal_roles)} approved):")
-            for role_name in sorted(medal_roles):
-                lines.append(await assign_role(role_name, "Medals"))
+            medal_lines = [await assign_role(rn, "Medals") for rn in sorted(medal_roles)]
+            embed.add_field(
+                name=f"🎖️ Medals ({len(medal_roles)} approved)",
+                value=truncate_field(medal_lines),
+                inline=False,
+            )
         else:
-            lines.append("\n🎖️ **Medals** — none found in MedalsRoster.")
+            embed.add_field(name="🎖️ Medals", value="None found in MedalsRoster.", inline=False)
             print(f"[MEDAL-SYNC]   No medals found for '{roblox_username}' (ID: {roblox_id_key})")
             log.info(f"[MEDAL-SYNC] No medals found for '{roblox_username}' (ID: {roblox_id_key})")
 
         # ── Venerations (Venerations tab) ────────────────────────────────────
-        veneration_roles = veneration_data.get(roblox_id_key, set())
-        if veneration_roles:
-            print(f"[MEDAL-SYNC]   VENERATIONS FOUND ({len(veneration_roles)}): {veneration_roles}")
-            log.info(f"[MEDAL-SYNC] '{roblox_username}' venerations from sheet: {veneration_roles}")
-            lines.append(f"\n🕯️ **Venerations** ({len(veneration_roles)} approved):")
-            for role_name in sorted(veneration_roles):
-                lines.append(await assign_role(role_name, "Venerations"))
+        veneration_role_set = veneration_data.get(roblox_id_key, set())
+        if veneration_role_set:
+            print(f"[MEDAL-SYNC]   VENERATIONS FOUND ({len(veneration_role_set)}): {veneration_role_set}")
+            log.info(f"[MEDAL-SYNC] '{roblox_username}' venerations from sheet: {veneration_role_set}")
+            ven_lines = [await assign_role(rn, "Venerations") for rn in sorted(veneration_role_set)]
+            embed.add_field(
+                name=f"🕯️ Venerations ({len(veneration_role_set)} approved)",
+                value=truncate_field(ven_lines),
+                inline=False,
+            )
         else:
-            lines.append("\n🕯️ **Venerations** — none found in Venerations tab.")
+            embed.add_field(name="🕯️ Venerations", value="None found in Venerations tab.", inline=False)
             print(f"[MEDAL-SYNC]   No venerations found for '{roblox_username}' (ID: {roblox_id_key})")
             log.info(f"[MEDAL-SYNC] No venerations found for '{roblox_username}' (ID: {roblox_id_key})")
 
@@ -1745,15 +1930,11 @@ async def medal_sync(interaction: discord.Interaction, users: str):
         if nob_roles:
             print(f"[MEDAL-SYNC]   NOBILITY FOUND ({len(nob_roles)}): {nob_roles} | prefix='{nob_prefix}'")
             log.info(f"[MEDAL-SYNC] '{roblox_username}' nobility from sheet: {nob_roles} prefix='{nob_prefix}'")
-            lines.append(f"\n👑 **Nobility** ({len(nob_roles)} approved):")
-            for role_name in sorted(nob_roles):
-                lines.append(await assign_role(role_name, "Nobility"))
+            nob_lines = [await assign_role(rn, "Nobility") for rn in sorted(nob_roles)]
 
-            # Apply nobility nickname prefix
             if nob_prefix:
                 current_nick = member.nick or member.display_name
                 if not current_nick.startswith(nob_prefix):
-                    # Strip any existing nobility prefix before prepending the new one
                     base = current_nick
                     for _g, (_r, pfx) in NOBILITY_ROLE_MAP.items():
                         if base.startswith(pfx + " "):
@@ -1762,31 +1943,32 @@ async def medal_sync(interaction: discord.Interaction, users: str):
                     new_nick = f"{nob_prefix} {base}"[:32]
                     try:
                         await member.edit(nick=new_nick, reason="Medal sync: nobility prefix applied")
-                        nick_msg = f"  ✅ [Nobility] Nickname updated → **{new_nick}**"
+                        nob_lines.append(f"✅ Nickname updated → **{new_nick}**")
                         print(f"[MEDAL-SYNC]   NICK UPDATED: '{current_nick}' → '{new_nick}' for {roblox_username}")
                         log.info(f"[MEDAL-SYNC] Nick '{current_nick}' → '{new_nick}' for '{roblox_username}'")
                     except discord.Forbidden:
-                        nick_msg = f"  ⚠️ [Nobility] Could not update nickname (bot role too low or server owner)."
-                        print(f"[MEDAL-SYNC]   NICK FORBIDDEN for {roblox_username}")
+                        nob_lines.append("⚠️ Could not update nickname (bot role too low or server owner).")
                         log.warning(f"[MEDAL-SYNC] Cannot update nick for '{roblox_username}' (Forbidden)")
-                    lines.append(nick_msg)
                 else:
-                    lines.append(f"  ✅ [Nobility] Nickname prefix **{nob_prefix}** already applied.")
+                    nob_lines.append(f"✅ Nickname prefix **{nob_prefix}** already applied.")
+
+            embed.add_field(
+                name=f"👑 Nobility ({len(nob_roles)} approved)",
+                value=truncate_field(nob_lines),
+                inline=False,
+            )
         else:
-            lines.append("\n👑 **Nobility** — none found in Nobility tab.")
+            embed.add_field(name="👑 Nobility", value="None found in Nobility tab.", inline=False)
             print(f"[MEDAL-SYNC]   No nobility found for '{roblox_username}'")
             log.info(f"[MEDAL-SYNC] No nobility found for '{roblox_username}'")
 
+        embed.set_footer(text=f"Synced by {interaction.user} • Roblox ID: {roblox_id_key}")
         log.info(f"[MEDAL-SYNC] Finished processing '{roblox_username}' ({member})")
         print(f"[MEDAL-SYNC] Done: {roblox_username}")
-        all_results.append("\n".join(lines))
+        await interaction.followup.send(embed=embed)
 
-    # ── Send results in chunks to avoid Discord's 2000-char limit ───────────
-    full_output = "\n\n".join(all_results) if all_results else "⚠️ No members were processed."
-    print(f"[MEDAL-SYNC] All done — sending results to Discord.")
+    print(f"[MEDAL-SYNC] All done — results sent to Discord.")
     log.info(f"[MEDAL-SYNC] Run complete by {interaction.user}")
-    for i in range(0, len(full_output), 1900):
-        await interaction.followup.send(full_output[i:i + 1900])
 # ============================================================
 
 class PromoteTypeSelect(discord.ui.Select):
@@ -1889,54 +2071,92 @@ async def promote(interaction: discord.Interaction, members: str):
         regiment_names = BRIGADE_REGIMENTS[target_brigade]
         await interaction.edit_original_response(content="⏳ Processing draft…", view=None)
 
-        async def draft_one(member: discord.Member) -> str:
-            roblox = await resolve_roblox_user(str(member.id))
+        async def draft_one(member: discord.Member) -> discord.Embed:
+            roblox     = await resolve_roblox_user(str(member.id))
+            roblox_id  = roblox["roblox_id"]  if roblox else None
+            username   = roblox["roblox_username"] if roblox else None
+            avatar_url = await roblox_get_avatar_url(roblox_id) if roblox_id else None
+
             if not roblox:
-                return f"❌ **{member.display_name}** — could not resolve Roblox account."
-            roblox_id = roblox["roblox_id"]
-            username  = roblox["roblox_username"]
+                embed = discord.Embed(
+                    title="Draft Failed",
+                    description="❌ Could not resolve Roblox account.",
+                    color=discord.Color.red(),
+                )
+                embed.set_author(name=member.display_name, icon_url=member.display_avatar.url)
+                return embed
+
             errors: list[str] = []
+            status_lines: list[str] = []
             guild = interaction.guild
 
             if not await roblox_set_rank(roblox_id, CAV_GROUP_ID, target_brigade):
                 errors.append("failed to set Roblox brigade rank")
+                status_lines.append("❌ Failed to set Roblox brigade rank — set manually.")
+            else:
+                status_lines.append(f"✅ Ranked to **{target_brigade}** in Roblox.")
 
             old_ranks     = [r for r in member.roles if r.name in ALL_RANK_ROLES]
             cavalier_role = discord.utils.get(guild.roles, name=DRAFT_RESET_RANK)
             try:
                 if old_ranks:     await member.remove_roles(*old_ranks, reason="Draft: rank reset")
-                if cavalier_role: await member.add_roles(cavalier_role, reason=f"Draft → {target_brigade}")
-                else:             errors.append(f"'{DRAFT_RESET_RANK}' role not found")
+                if cavalier_role:
+                    await member.add_roles(cavalier_role, reason=f"Draft → {target_brigade}")
+                    status_lines.append(f"✅ Rank reset to **{DRAFT_RESET_RANK}**.")
+                else:
+                    errors.append(f"'{DRAFT_RESET_RANK}' role not found")
+                    status_lines.append(f"❌ Role **{DRAFT_RESET_RANK}** not found in server.")
             except discord.Forbidden:
                 errors.append("missing permissions for rank roles")
+                status_lines.append("❌ Missing permissions to modify rank roles.")
 
             old_brigades     = [r for r in member.roles if r.name in ALL_BRIGADE_ROLES]
             new_brigade_role = discord.utils.get(guild.roles, name=target_brigade)
             try:
                 if old_brigades:     await member.remove_roles(*old_brigades, reason="Draft: brigade swap")
-                if new_brigade_role: await member.add_roles(new_brigade_role, reason=f"Draft → {target_brigade}")
-                else:                errors.append(f"'{target_brigade}' Discord role not found")
+                if new_brigade_role:
+                    await member.add_roles(new_brigade_role, reason=f"Draft → {target_brigade}")
+                    status_lines.append(f"✅ Brigade set to **{target_brigade}**.")
+                else:
+                    errors.append(f"'{target_brigade}' Discord role not found")
+                    status_lines.append(f"❌ Role **{target_brigade}** not found in server.")
             except discord.Forbidden:
                 errors.append("missing permissions for brigade roles")
+                status_lines.append("❌ Missing permissions to modify brigade roles.")
 
             old_regiments      = [r for r in member.roles if r.name in ALL_REGIMENT_ROLES]
             new_regiment_roles = [discord.utils.get(guild.roles, name=rn) for rn in regiment_names]
             new_regiment_roles = [r for r in new_regiment_roles if r is not None]
             try:
                 if old_regiments:      await member.remove_roles(*old_regiments, reason="Draft: regiment swap")
-                if new_regiment_roles: await member.add_roles(*new_regiment_roles, reason=f"Draft → {target_brigade}")
+                if new_regiment_roles:
+                    await member.add_roles(*new_regiment_roles, reason=f"Draft → {target_brigade}")
+                    status_lines.append(f"✅ Regiments: {', '.join(regiment_names)}.")
             except discord.Forbidden:
                 errors.append("missing permissions for regiment roles")
+                status_lines.append("❌ Missing permissions to modify regiment roles.")
 
-            if errors:
-                return f"⚠️ **{username}** — drafted with issues: {'; '.join(errors)}."
-            log.info(f"[PROMOTE/DRAFT] {username} drafted → {target_brigade} by {interaction.user}")
-            return (f"✅ **{username}** — drafted to **{target_brigade}** "
-                    f"({', '.join(regiment_names)}), rank reset to **{DRAFT_RESET_RANK}**.")
+            color = discord.Color.orange() if errors else discord.Color.dark_blue()
+            embed = discord.Embed(title="Draft Results", color=color)
+            embed.set_author(
+                name=f"{member.display_name} ({username})",
+                icon_url=member.display_avatar.url,
+            )
+            if avatar_url:
+                embed.set_thumbnail(url=avatar_url)
+            embed.add_field(name="Discord", value=f"<@{member.id}>", inline=True)
+            embed.add_field(name="Roblox",  value=username, inline=True)
+            embed.add_field(name="Actions", value="\n".join(status_lines), inline=False)
+            embed.set_footer(text=f"Drafted by {interaction.user} • Roblox ID: {roblox_id}")
+            if not errors:
+                log.info(f"[PROMOTE/DRAFT] {username} drafted → {target_brigade} by {interaction.user}")
+            return embed
 
         async with asyncio.timeout(120):
-            results = await asyncio.gather(*[draft_one(m) for m in targets])
-        await interaction.edit_original_response(content="\n".join(results), view=None)
+            embeds = await asyncio.gather(*[draft_one(m) for m in targets])
+        await interaction.edit_original_response(content="✅ Draft complete.", view=None)
+        for emb in embeds:
+            await interaction.followup.send(embed=emb, ephemeral=False)
         return
 
     max_idx = len(DISCORD_RANKS) - 1 if senior else min(exec_idx - 1, SENIOR_THRESHOLD - 1)
@@ -1958,30 +2178,65 @@ async def promote(interaction: discord.Interaction, members: str):
     target_rank_idx = DISCORD_RANK_INDEX[target_rank]
     await interaction.edit_original_response(content="⏳ Processing promotions…", view=None)
 
-    async def promote_one(member: discord.Member) -> str:
+    async def promote_one(member: discord.Member) -> discord.Embed:
+        roblox     = await resolve_roblox_user(str(member.id))
+        roblox_id  = roblox["roblox_id"]  if roblox else None
+        username   = roblox["roblox_username"] if roblox else None
+        avatar_url = await roblox_get_avatar_url(roblox_id) if roblox_id else None
+
         current_rank = get_highest_rank(member)
         current_idx  = DISCORD_RANK_INDEX.get(current_rank, -1)
+
+        def _make_embed(color: discord.Color, description: str) -> discord.Embed:
+            emb = discord.Embed(title="Promotion Results", color=color)
+            emb.set_author(
+                name=f"{member.display_name}{' (' + username + ')' if username else ''}",
+                icon_url=member.display_avatar.url,
+            )
+            if avatar_url:
+                emb.set_thumbnail(url=avatar_url)
+            emb.add_field(name="Discord", value=f"<@{member.id}>", inline=True)
+            if username:
+                emb.add_field(name="Roblox", value=username, inline=True)
+            emb.add_field(name="Actions", value=description, inline=False)
+            emb.set_footer(text=f"Promoted by {interaction.user}"
+                           + (f" • Roblox ID: {roblox_id}" if roblox_id else ""))
+            return emb
+
         if current_idx >= target_rank_idx:
-            return (f"⚠️ **{member.display_name}** — already holds **{current_rank}**, "
-                    f"equal to or above **{target_rank}**. Skipped.")
+            return _make_embed(
+                discord.Color.orange(),
+                f"⚠️ Already holds **{current_rank}**, equal to or above **{target_rank}**. Skipped.",
+            )
         if current_idx >= exec_idx and not senior:
-            return f"❌ **{member.display_name}** — cannot promote someone of equal or higher rank."
+            return _make_embed(
+                discord.Color.red(),
+                "❌ Cannot promote someone of equal or higher rank.",
+            )
         new_role = discord.utils.get(interaction.guild.roles, name=target_rank)
         if not new_role:
-            return f"❌ **{member.display_name}** — Discord role **{target_rank}** not found in server."
+            return _make_embed(
+                discord.Color.red(),
+                f"❌ Discord role **{target_rank}** not found in server.",
+            )
         old_ranks = [r for r in member.roles if r.name in ALL_RANK_ROLES]
         try:
             if old_ranks: await member.remove_roles(*old_ranks, reason="Promotion: strip old rank")
             await member.add_roles(new_role, reason=f"Promoted to {target_rank}")
         except discord.Forbidden:
-            return f"❌ **{member.display_name}** — missing permissions to modify roles."
+            return _make_embed(discord.Color.red(), "❌ Missing permissions to modify roles.")
         prev = current_rank or "no rank"
         log.info(f"[PROMOTE/RANK] {member} {prev} → {target_rank} by {interaction.user}")
-        return f"✅ **{member.display_name}** — promoted from **{prev}** → **{target_rank}**."
+        return _make_embed(
+            discord.Color.dark_blue(),
+            f"✅ Promoted from **{prev}** → **{target_rank}**.",
+        )
 
     async with asyncio.timeout(120):
-        results = await asyncio.gather(*[promote_one(m) for m in targets])
-    await interaction.edit_original_response(content="\n".join(results), view=None)
+        embeds = await asyncio.gather(*[promote_one(m) for m in targets])
+    await interaction.edit_original_response(content="✅ Promotion complete.", view=None)
+    for emb in embeds:
+        await interaction.followup.send(embed=emb)
 
 # ============================================================
 #  RUN

@@ -58,12 +58,19 @@ def webhook():
         log.info("Push to %s ignored (watching %s)", ref, BRANCH)
         return "ignored", 200
 
-    log.info("Push received — pulling and restarting…")
+    log.info("Push received — fetching and force-resetting…")
 
     try:
-        out = _run(["git", "pull", "origin", BRANCH])
-        log.info("git pull: %s", out)
+        # Download the latest data from GitHub without merging yet
+        out = _run(["git", "fetch", "origin", BRANCH])
+        log.info("git fetch: %s", out)
 
+        # Force the local branch to match the remote tracking branch.
+        # This obliterates any local staged or unstaged modifications.
+        out = _run(["git", "reset", "--hard", f"origin/{BRANCH}"])
+        log.info("git reset: %s", out)
+
+        # Restart the bot process
         out = _run(["pm2", "restart", PM2_APP_NAME])
         log.info("pm2 restart: %s", out)
     except RuntimeError as exc:
