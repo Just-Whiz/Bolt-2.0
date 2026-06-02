@@ -39,7 +39,7 @@ CAV_SPREADSHEET_ID    = os.getenv("CAV_SPREADSHEET_ID")
 def _oc_headers() -> dict:
     return {"x-api-key": ROBLOX_OPEN_CLOUD, "Content-Type": "application/json"}
 
-HTTP_TIMEOUT     = aiohttp.ClientTimeout(total=12)
+HTTP_TIMEOUT     = aiohttp.ClientTimeout(connect=10, sock_read=10)
 ROBLOX_SEMAPHORE = asyncio.Semaphore(3)
 
 # ============================================================
