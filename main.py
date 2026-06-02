@@ -694,27 +694,27 @@ async def roblox_accept_join_request(roblox_id: str, group_id: str) -> bool:
         return False
     async with ROBLOX_SEMAPHORE:
         try:
-            async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as s:
-                async with s.get(
-                    f"https://apis.roblox.com/cloud/v2/groups/{group_id}/join-requests",
+            async with httpx.AsyncClient(timeout=15) as s:
+                r = await s.get(
+                    f"https://roblox-proxy.christiansuy25.workers.dev/apis/cloud/v2/groups/{group_id}/join-requests",
                     headers=_oc_headers(), params={"maxPageSize": 100},
-                ) as r:
-                    if r.status != 200:
-                        return False
-                    data = await r.json()
+                )
+                if r.status_code != 200:
+                    return False
+                data = r.json()
                 request_path = next(
                     (req.get("path") for req in data.get("groupJoinRequests", [])
                      if str(roblox_id) in req.get("user", "")), None,
                 )
                 if not request_path:
                     return False
-                async with s.post(
-                    f"https://apis.roblox.com/cloud/v2/{request_path}:accept",
+                r = await s.post(
+                    f"https://roblox-proxy.christiansuy25.workers.dev/apis/cloud/v2/{request_path}:accept",
                     headers=_oc_headers(), json={},
-                ) as r:
-                    return r.status in (200, 204)
+                )
+                return r.status_code in (200, 204)
         except Exception as e:
-            print(f"[ROBLOX] accept_join_request error: {e}")
+            print(f"[ROBLOX] accept_join_request error: {e!r}")
             return False
 
 async def roblox_set_rank(roblox_id: str, group_id: str, rank_name: str) -> bool:
@@ -722,19 +722,19 @@ async def roblox_set_rank(roblox_id: str, group_id: str, rank_name: str) -> bool
         return False
     async with ROBLOX_SEMAPHORE:
         try:
-            async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as s:
+            async with httpx.AsyncClient(timeout=15) as s:
                 all_roles, page_token = [], None
                 while True:
                     params = {"maxPageSize": 20}
                     if page_token:
                         params["pageToken"] = page_token
-                    async with s.get(
-                        f"https://apis.roblox.com/cloud/v2/groups/{group_id}/roles",
+                    r = await s.get(
+                        f"https://roblox-proxy.christiansuy25.workers.dev/apis/cloud/v2/groups/{group_id}/roles",
                         headers=_oc_headers(), params=params,
-                    ) as r:
-                        if r.status != 200:
-                            return False
-                        rd = await r.json()
+                    )
+                    if r.status_code != 200:
+                        return False
+                    rd = r.json()
                     all_roles.extend(rd.get("groupRoles", []))
                     page_token = rd.get("nextPageToken") or ""
                     if not page_token:
@@ -748,27 +748,27 @@ async def roblox_set_rank(roblox_id: str, group_id: str, rank_name: str) -> bool
                 if not role_path:
                     return False
 
-                async with s.get(
-                    f"https://apis.roblox.com/cloud/v2/groups/{group_id}/memberships",
+                r = await s.get(
+                    f"https://roblox-proxy.christiansuy25.workers.dev/apis/cloud/v2/groups/{group_id}/memberships",
                     headers=_oc_headers(),
                     params={"filter": f"user == 'users/{roblox_id}'"},
-                ) as r:
-                    if r.status != 200:
-                        return False
-                    memberships = (await r.json()).get("groupMemberships", [])
-                    if not memberships:
-                        return False
+                )
+                if r.status_code != 200:
+                    return False
+                memberships = r.json().get("groupMemberships", [])
+                if not memberships:
+                    return False
 
-                async with s.patch(
-                    f"https://apis.roblox.com/cloud/v2/{memberships[0]['path']}",
+                r = await s.patch(
+                    f"https://roblox-proxy.christiansuy25.workers.dev/apis/cloud/v2/{memberships[0]['path']}",
                     headers=_oc_headers(), json={"role": role_path},
-                ) as r:
-                    success = r.status in (200, 204)
-                    if success:
-                        log.info(f"[ROBLOX] Ranked {roblox_id} → '{rank_name}' in {group_id}")
-                    return success
+                )
+                success = r.status_code in (200, 204)
+                if success:
+                    log.info(f"[ROBLOX] Ranked {roblox_id} → '{rank_name}' in {group_id}")
+                return success
         except Exception as e:
-            print(f"[ROBLOX] roblox_set_rank error: {e}")
+            print(f"[ROBLOX] roblox_set_rank error: {e!r}")
             return False
 
 async def roblox_kick_from_group(roblox_id: str, group_id: str) -> bool:
@@ -776,27 +776,28 @@ async def roblox_kick_from_group(roblox_id: str, group_id: str) -> bool:
         return False
     async with ROBLOX_SEMAPHORE:
         try:
-            async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as s:
-                async with s.get(
-                    f"https://apis.roblox.com/cloud/v2/groups/{group_id}/memberships",
+            async with httpx.AsyncClient(timeout=15) as s:
+                r = await s.get(
+                    f"https://roblox-proxy.christiansuy25.workers.dev/apis/cloud/v2/groups/{group_id}/memberships",
                     headers=_oc_headers(),
                     params={"filter": f"user == 'users/{roblox_id}'"},
-                ) as r:
-                    if r.status != 200:
-                        return False
-                    memberships = (await r.json()).get("groupMemberships", [])
-                    if not memberships:
-                        return False
-                    path = memberships[0]["path"]
-                async with s.delete(
-                    f"https://apis.roblox.com/cloud/v2/{path}", headers=_oc_headers(),
-                ) as r:
-                    success = r.status in (200, 204)
-                    if success:
-                        log.info(f"[ROBLOX] Kicked {roblox_id} from {group_id}")
-                    return success
+                )
+                if r.status_code != 200:
+                    return False
+                memberships = r.json().get("groupMemberships", [])
+                if not memberships:
+                    return False
+                path = memberships[0]["path"]
+                r = await s.delete(
+                    f"https://roblox-proxy.christiansuy25.workers.dev/apis/cloud/v2/{path}",
+                    headers=_oc_headers(),
+                )
+                success = r.status_code in (200, 204)
+                if success:
+                    log.info(f"[ROBLOX] Kicked {roblox_id} from {group_id}")
+                return success
         except Exception as e:
-            print(f"[ROBLOX] kick_from_group error: {e}")
+            print(f"[ROBLOX] kick_from_group error: {e!r}")
             return False
 
 # ============================================================
