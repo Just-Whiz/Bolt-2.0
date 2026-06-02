@@ -16,6 +16,7 @@ import discord
 import gspread
 from discord import app_commands
 from discord.ext import commands, tasks
+import httpx
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -611,23 +612,15 @@ async def cache_user(discord_id: str, roblox_id: str, username: str, discord_use
 
 async def roblox_get_user_info(roblox_id: str) -> dict:
     async with ROBLOX_SEMAPHORE:
-        for attempt in range(2):
-            try:
-                async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as s:
-                    async with s.get(f"https://users.roblox.com/v1/users/{roblox_id}") as r:
-                        if r.status != 200:
-                            body = await r.text()
-                            print(f"[ROBLOX] roblox_get_user_info {roblox_id} HTTP {r.status}: {body[:100]}")
-                            return {}
-                        data = await r.json()
-                        break
-            except Exception as e:
-                print(f"[ROBLOX] roblox_get_user_info {roblox_id} attempt {attempt+1} {type(e).__name__}: {e!r}")
-                if attempt == 0:
-                    await asyncio.sleep(3)
-                else:
+        try:
+            async with httpx.AsyncClient(timeout=15) as s:
+                r = await s.get(f"https://users.roblox.com/v1/users/{roblox_id}")
+                if r.status_code != 200:
+                    print(f"[ROBLOX] roblox_get_user_info {roblox_id} HTTP {r.status_code}")
                     return {}
-        else:
+                data = r.json()
+        except Exception as e:
+            print(f"[ROBLOX] roblox_get_user_info {roblox_id} {type(e).__name__}: {e!r}")
             return {}
     account_age, created_str = "Unknown", data.get("created", "")
     if created_str:
@@ -651,45 +644,41 @@ async def roblox_get_username(roblox_id: str) -> str | None:
 async def roblox_get_previous_usernames(roblox_id: str) -> str:
     async with ROBLOX_SEMAPHORE:
         try:
-            async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as s:
-                async with s.get(
-                    f"https://users.roblox.com/v1/users/{roblox_id}/username-history?limit=10"
-                ) as r:
-                    if r.status != 200:
-                        return "None"
-                    names = [e["name"] for e in (await r.json()).get("data", [])]
-                    return ", ".join(names) if names else "None"
+            async with httpx.AsyncClient(timeout=15) as s:
+                r = await s.get(f"https://users.roblox.com/v1/users/{roblox_id}/username-history?limit=10")
+                if r.status_code != 200:
+                    return "None"
+                names = [e["name"] for e in r.json().get("data", [])]
+                return ", ".join(names) if names else "None"
         except Exception:
             return "None"
 
 async def roblox_get_avatar_url(roblox_id: str) -> str | None:
     async with ROBLOX_SEMAPHORE:
         try:
-            async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as s:
-                async with s.get(
+            async with httpx.AsyncClient(timeout=15) as s:
+                r = await s.get(
                     f"https://thumbnails.roblox.com/v1/users/avatar-headshot"
                     f"?userIds={roblox_id}&size=150x150&format=Png&isCircular=false"
-                ) as r:
-                    if r.status != 200:
-                        return None
-                    entries = (await r.json()).get("data", [])
-                    return entries[0].get("imageUrl") if entries else None
+                )
+                if r.status_code != 200:
+                    return None
+                entries = r.json().get("data", [])
+                return entries[0].get("imageUrl") if entries else None
         except Exception:
             return None
 
 async def roblox_get_group_memberships(roblox_id: str) -> list[dict]:
     async with ROBLOX_SEMAPHORE:
         try:
-            async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as s:
-                async with s.get(
-                    f"https://groups.roblox.com/v2/users/{roblox_id}/groups/roles"
-                ) as r:
-                    if r.status != 200:
-                        return []
-                    return [
-                        {"name": e["group"]["name"], "id": str(e["group"]["id"]), "rank": e["role"]["name"]}
-                        for e in (await r.json()).get("data", [])
-                    ]
+            async with httpx.AsyncClient(timeout=15) as s:
+                r = await s.get(f"https://groups.roblox.com/v2/users/{roblox_id}/groups/roles")
+                if r.status_code != 200:
+                    return []
+                return [
+                    {"name": e["group"]["name"], "id": str(e["group"]["id"]), "rank": e["role"]["name"]}
+                    for e in r.json().get("data", [])
+                ]
         except Exception as e:
             print(f"[ROBLOX] roblox_get_group_memberships error: {e}")
             return []

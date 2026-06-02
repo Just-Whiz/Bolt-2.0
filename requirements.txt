@@ -5,3 +5,4 @@ google-auth
 aiohttp
 flask
 cloudflared
+httpx
