@@ -39,7 +39,7 @@ CAV_SPREADSHEET_ID    = os.getenv("CAV_SPREADSHEET_ID")
 def _oc_headers() -> dict:
     return {"x-api-key": ROBLOX_OPEN_CLOUD, "Content-Type": "application/json"}
 
-HTTP_TIMEOUT     = aiohttp.ClientTimeout(connect=10, sock_read=5)
+HTTP_TIMEOUT     = aiohttp.ClientTimeout(connect=10, sock_read=15)
 ROBLOX_SEMAPHORE = asyncio.Semaphore(3)
 
 # ============================================================
@@ -611,16 +611,23 @@ async def cache_user(discord_id: str, roblox_id: str, username: str, discord_use
 
 async def roblox_get_user_info(roblox_id: str) -> dict:
     async with ROBLOX_SEMAPHORE:
-        try:
-            async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as s:
-                async with s.get(f"https://users.roblox.com/v1/users/{roblox_id}") as r:
-                    if r.status != 200:
-                        body = await r.text()
-                        print(f"[ROBLOX] roblox_get_user_info {roblox_id} HTTP {r.status}: {body[:100]}")
-                        return {}
-                    data = await r.json()
-        except Exception as e:
-            print(f"[ROBLOX] roblox_get_user_info {roblox_id} {type(e).__name__}: {e!r}")
+        for attempt in range(2):
+            try:
+                async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as s:
+                    async with s.get(f"https://users.roblox.com/v1/users/{roblox_id}") as r:
+                        if r.status != 200:
+                            body = await r.text()
+                            print(f"[ROBLOX] roblox_get_user_info {roblox_id} HTTP {r.status}: {body[:100]}")
+                            return {}
+                        data = await r.json()
+                        break
+            except Exception as e:
+                print(f"[ROBLOX] roblox_get_user_info {roblox_id} attempt {attempt+1} {type(e).__name__}: {e!r}")
+                if attempt == 0:
+                    await asyncio.sleep(3)
+                else:
+                    return {}
+        else:
             return {}
     account_age, created_str = "Unknown", data.get("created", "")
     if created_str:
