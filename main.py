@@ -615,10 +615,11 @@ async def roblox_get_user_info(roblox_id: str) -> dict:
             async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as s:
                 async with s.get(f"https://users.roblox.com/v1/users/{roblox_id}") as r:
                     if r.status != 200:
+                        print(f"[ROBLOX] roblox_get_user_info {roblox_id} HTTP {r.status}")
                         return {}
                     data = await r.json()
         except Exception as e:
-            print(f"[ROBLOX] roblox_get_user_info error: {e}")
+            print(f"[ROBLOX] roblox_get_user_info {roblox_id} {type(e).__name__}: {e!r}")
             return {}
     account_age, created_str = "Unknown", data.get("created", "")
     if created_str:
