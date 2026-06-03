@@ -40,7 +40,7 @@ CAV_SPREADSHEET_ID = os.getenv("CAV_SPREADSHEET_ID")
 def _oc_headers() -> dict:
     return {"x-api-key": ROBLOX_OPEN_CLOUD, "Content-Type": "application/json"}
 
-HTTP_TIMEOUT     = aiohttp.ClientTimeout(connect=10, sock_read=15)
+HTTP_TIMEOUT = aiohttp.ClientTimeout(connect=10, sock_read=15)
 ROBLOX_SEMAPHORE = asyncio.Semaphore(3)
 
 # ============================================================
@@ -790,43 +790,57 @@ async def roblox_set_rank(roblox_id: str, group_id: str, rank_name: str) -> bool
             return False
 
 async def roblox_kick_from_group(roblox_id: str, group_id: str) -> bool:
-    """Method 1: Plain kick (Exile) via Open Cloud v1 API."""
+    """Plain kick (Exile) via Open Cloud v2 API — routed through Cloudflare worker."""
     if not ROBLOX_OPEN_CLOUD:
         return False
     async with ROBLOX_SEMAPHORE:
         try:
-            # Open Cloud v1 endpoint to remove/delete a membership
-            url = f"https://apis.roblox.com/cloud/v1/groups/{group_id}/memberships/{roblox_id}"
-            async with httpx.AsyncClient(timeout=15) as client:
-                r = await client.delete(url, headers=_oc_headers())
-            
-            success = r.status_code in (200, 204)
-            if success:
-                log.info(f"[ROBLOX] Kicked user {roblox_id} from group {group_id}")
-            else:
-                log.error(f"[ROBLOX] Kick failed for {roblox_id}: {r.status_code} - {r.text}")
-            return success
+            # Resolve the membership path first (same pattern as roblox_set_rank)
+            async with httpx.AsyncClient(timeout=15) as s:
+                r = await s.get(
+                    f"https://roblox-proxy.christiansuy25.workers.dev/apis/cloud/v2/groups/{group_id}/memberships",
+                    headers=_oc_headers(),
+                    params={"filter": f"user == 'users/{roblox_id}'"},
+                )
+                if r.status_code != 200:
+                    log.error(f"[ROBLOX] Kick: membership lookup failed for {roblox_id}: {r.status_code}")
+                    return False
+                memberships = r.json().get("groupMemberships", [])
+                if not memberships:
+                    log.warning(f"[ROBLOX] Kick: {roblox_id} not a member of group {group_id}")
+                    return False
+
+                membership_path = memberships[0]["path"]
+                r = await s.delete(
+                    f"https://roblox-proxy.christiansuy25.workers.dev/apis/cloud/v2/{membership_path}",
+                    headers=_oc_headers(),
+                )
+                success = r.status_code in (200, 204)
+                if success:
+                    log.info(f"[ROBLOX] Kicked user {roblox_id} from group {group_id}")
+                else:
+                    log.error(f"[ROBLOX] Kick failed for {roblox_id}: {r.status_code} - {r.text}")
+                return success
         except Exception as e:
             print(f"[ROBLOX] kick_from_group error: {e!r}")
             return False
 
 async def roblox_ban_from_group(roblox_id: str, group_id: str, reason: str = "Purged and Blacklisted") -> bool:
-    """Method 1: Hard ban user from the Roblox group via Open Cloud v1 API."""
+    """Hard ban user from the Roblox group via Open Cloud v2 API — routed through Cloudflare worker."""
     if not ROBLOX_OPEN_CLOUD:
         return False
     async with ROBLOX_SEMAPHORE:
         try:
-            # Open Cloud v1 endpoint to create a group ban configuration
-            url = f"https://apis.roblox.com/cloud/v1/groups/{group_id}/bans"
+            url = f"https://roblox-proxy.christiansuy25.workers.dev/apis/cloud/v2/groups/{group_id}/bans"
             payload = {
                 "user": f"users/{roblox_id}",
                 "displayReason": reason,
                 "privateReason": "Action executed automatically via Bolt 2.0 /purge command.",
-                "deleteMessages": True  # Clean up wall posts
+                "deleteMessages": True,
             }
             async with httpx.AsyncClient(timeout=15) as client:
                 r = await client.post(url, headers=_oc_headers(), json=payload)
-                
+
             success = r.status_code in (200, 201)
             if success:
                 log.info(f"[ROBLOX] Banned user {roblox_id} from group {group_id}")
