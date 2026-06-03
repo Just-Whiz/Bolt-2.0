@@ -578,9 +578,9 @@ _STAFF_ROLES: set[str] = {
 COMMAND_PERMISSIONS: dict[str, set[str]] = {
     "background-check": {"@everyone"},
     "induct": {"Recruitment Team"} | _STAFF_ROLES,
-    "purge": _STAFF_ROLES,
+    "purge": SENIOR_PROMOTER_ROLES,
     "promote": _STAFF_ROLES,
-    "medal-sync": _STAFF_ROLES,
+    "medal-sync": {"@everyone"},
     "export-rosters": _STAFF_ROLES,
 }
 
