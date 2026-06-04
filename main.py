@@ -826,12 +826,12 @@ async def roblox_kick_from_group(roblox_id: str, group_id: str) -> bool:
             return False
 
 async def roblox_ban_from_group(roblox_id: str, group_id: str, reason: str = "Purged and Blacklisted") -> bool:
-    """Hard ban user from the Roblox group via Open Cloud v2 API — routed through Cloudflare worker."""
+    """Hard ban user from the Roblox group via Open Cloud v1 API — routed through Cloudflare worker."""
     if not ROBLOX_OPEN_CLOUD:
         return False
     async with ROBLOX_SEMAPHORE:
         try:
-            url = f"https://roblox-proxy.christiansuy25.workers.dev/apis/cloud/v2/groups/{group_id}/bans"
+            url = f"https://roblox-proxy.christiansuy25.workers.dev/apis/cloud/v1/groups/{group_id}/bans"
             payload = {
                 "user": f"users/{roblox_id}",
                 "displayReason": reason,

@@ -15,6 +15,16 @@ PM2_APP_NAME = os.getenv("PM2_APP_NAME", "bolt-bot")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
 PORT = int(os.getenv("WEBHOOK_PORT", 9000))
 BRANCH = os.getenv("GIT_BRANCH", "main")
+
+# Files that live only on the Pi and must never be overwritten by a git pull.
+# Add any other local-only files here (e.g. "credentials.json", ".env").
+LOCAL_ONLY_FILES = [
+    "credentials.json",
+    ".env",
+    "verified_users.json",
+    "bolt.log",
+    "test.py",
+]
 # ─────────────────────────────────────────────────────────────────────────────
 
 logging.basicConfig(
@@ -34,12 +44,12 @@ def _verify(payload: bytes, sig_header: str) -> bool:
     return hmac.compare_digest(expected, sig_header or "")
 
 
-def _run(cmd: list[str]) -> str:
+def _run(cmd: list[str], check: bool = True) -> str:
     result = subprocess.run(
         cmd, capture_output=True, text=True, cwd=PROJECT_DIR
     )
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip())
+    if check and result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or result.stdout.strip())
     return result.stdout.strip()
 
 
@@ -58,21 +68,42 @@ def webhook():
         log.info("Push to %s ignored (watching %s)", ref, BRANCH)
         return "ignored", 200
 
-    log.info("Push received — fetching and force-resetting…")
+    log.info("Push received on %s — deploying…", BRANCH)
 
     try:
-        # Download the latest data from GitHub without merging yet
-        out = _run(["git", "fetch", "origin", BRANCH])
-        log.info("git fetch: %s", out)
+        # Stash any local modifications so the reset doesn't destroy them.
+        # If there's nothing to stash this is a no-op.
+        stash_out = _run(["git", "stash", "--include-untracked"], check=False)
+        stashed = "No local changes" not in stash_out and stash_out.strip() != ""
+        log.info("git stash: %s", stash_out or "(nothing to stash)")
 
-        # Force the local branch to match the remote tracking branch.
-        # This obliterates any local staged or unstaged modifications.
+        # Fetch latest from GitHub
+        out = _run(["git", "fetch", "origin", BRANCH])
+        log.info("git fetch: %s", out or "ok")
+
+        # Reset to match remote exactly
         out = _run(["git", "reset", "--hard", f"origin/{BRANCH}"])
         log.info("git reset: %s", out)
 
-        # Restart the bot process
+        # Restore local-only files from the stash if we stashed anything.
+        # We selectively restore only the LOCAL_ONLY_FILES so that actual
+        # code changes from GitHub are not overwritten.
+        if stashed:
+            for fname in LOCAL_ONLY_FILES:
+                restore = _run(
+                    ["git", "checkout", "stash", "--", fname],
+                    check=False,
+                )
+                if restore:
+                    log.info("Restored local file from stash: %s", fname)
+            # Drop the stash entry now that we're done with it
+            _run(["git", "stash", "drop"], check=False)
+            log.info("Stash dropped.")
+
+        # Restart the bot
         out = _run(["pm2", "restart", PM2_APP_NAME])
         log.info("pm2 restart: %s", out)
+
     except RuntimeError as exc:
         log.error("Deploy failed: %s", exc)
         return f"deploy error: {exc}", 500
