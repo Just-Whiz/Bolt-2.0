@@ -790,39 +790,20 @@ async def roblox_set_rank(roblox_id: str, group_id: str, rank_name: str) -> bool
             return False
 
 async def roblox_kick_from_group(roblox_id: str, group_id: str) -> bool:
-    """Plain kick (exile) from the Roblox group via Open Cloud v2 — uses aiohttp, routed through Cloudflare worker."""
+    """Plain kick (exile) from the Roblox group via Open Cloud v1 — uses aiohttp, routed through Cloudflare worker."""
     if not ROBLOX_OPEN_CLOUD:
         print(f"[PURGE/KICK] Aborted — ROBLOX_OPEN_CLOUD key not set.")
         return False
     async with ROBLOX_SEMAPHORE:
         try:
+            # v1 DELETE uses the plain numeric userId directly — no membership path lookup needed.
+            delete_url = (
+                f"https://roblox-proxy.christiansuy25.workers.dev"
+                f"/apis/cloud/v1/groups/{group_id}/memberships/{roblox_id}"
+            )
+            print(f"[PURGE/KICK] DELETE {delete_url}")
             timeout = aiohttp.ClientTimeout(connect=10, sock_read=15)
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                # Step 1: look up the membership resource path for this user
-                lookup_url = (
-                    f"https://roblox-proxy.christiansuy25.workers.dev"
-                    f"/apis/cloud/v2/groups/{group_id}/memberships"
-                )
-                params = {"filter": f"user == 'users/{roblox_id}'"}
-                print(f"[PURGE/KICK] GET {lookup_url} | filter=user==users/{roblox_id}")
-                async with session.get(lookup_url, headers=_oc_headers(), params=params) as r:
-                    body = await r.json(content_type=None)
-                    print(f"[PURGE/KICK] Membership lookup → HTTP {r.status} | body: {body}")
-                    if r.status != 200:
-                        log.error(f"[ROBLOX] Kick: membership lookup failed for {roblox_id}: {r.status}")
-                        return False
-                    memberships = body.get("groupMemberships", [])
-                    if not memberships:
-                        print(f"[PURGE/KICK] User {roblox_id} has no membership entry in group {group_id} — already removed?")
-                        log.warning(f"[ROBLOX] Kick: {roblox_id} not a member of group {group_id}")
-                        return False
-
-                # Step 2: DELETE the membership directly via its resource path.
-                # The path from the API looks like "groups/{id}/memberships/{id}" — we
-                # must NOT prepend "apis/cloud/v2/" again or the proxy will double it.
-                raw_path = memberships[0].get("path", "")
-                delete_url = f"https://roblox-proxy.christiansuy25.workers.dev/apis/cloud/v2/{raw_path}"
-                print(f"[PURGE/KICK] DELETE {delete_url}")
                 async with session.delete(delete_url, headers=_oc_headers()) as r:
                     resp_text = await r.text()
                     print(f"[PURGE/KICK] Kick response → HTTP {r.status} | body: {resp_text}")
