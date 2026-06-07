@@ -18,6 +18,11 @@ from discord import app_commands
 from discord.ext import commands, tasks
 import httpx
 from dotenv import load_dotenv
+from sheets_sync import (
+    async_sync_induct,
+    async_sync_promote,
+    async_sync_purge,
+)
 
 load_dotenv()
 
@@ -792,38 +797,55 @@ async def roblox_set_rank(roblox_id: str, group_id: str, rank_name: str) -> bool
 
 async def roblox_ban_user(roblox_id: str, group_id: str, reason: str = "Removed from Corps de Cavalerie Impériale") -> bool:
     """
-    Ban a user from the Roblox group via Open Cloud v1.
-    This is the only ToS-safe removal method (no cookie auth required).
-    Used by /purge (both Remove Only and Remove & Blacklist modes).
+    Kick a user from the Roblox group by deleting their membership via Open Cloud v2.
+    No /bans endpoint exists in Roblox Open Cloud for groups — the only ToS-safe
+    removal method is DELETE on the membership resource.
+    Used by /purge and the auto-blacklist flow.
     """
     if not ROBLOX_OPEN_CLOUD:
         print(f"[PURGE/BAN] Aborted — ROBLOX_OPEN_CLOUD key not set.")
         return False
     async with ROBLOX_SEMAPHORE:
         try:
-            url = (
-                f"https://roblox-proxy.christiansuy25.workers.dev"
-                f"/apis/cloud/v1/groups/{group_id}/bans"
+            base = "https://roblox-proxy.christiansuy25.workers.dev"
+            # Step 1: look up the membership path for this user
+            membership_url = (
+                f"{base}/apis/cloud/v2/groups/{group_id}/memberships"
+                f"?filter=user+%3D%3D+%27users%2F{roblox_id}%27"
             )
-            payload = {
-                "user": f"users/{roblox_id}",
-                "displayReason": reason,
-                "privateReason": "Action executed automatically via Bolt 2.0 /purge command.",
-                "deleteMessages": True,
-            }
-            print(f"[PURGE/BAN] POST {url} | payload: {payload}")
+            print(f"[PURGE/BAN] GET membership for user {roblox_id} in group {group_id}")
             timeout = aiohttp.ClientTimeout(connect=10, sock_read=15)
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(url, headers=_oc_headers(), json=payload) as r:
+                async with session.get(membership_url, headers=_oc_headers()) as r:
                     resp_text = await r.text()
-                    print(f"[PURGE/BAN] Ban response → HTTP {r.status} | body: {resp_text}")
-                    success = r.status in (200, 201)
-                    if success:
-                        log.info(f"[ROBLOX] Banned user {roblox_id} from group {group_id}")
-                        print(f"[PURGE/BAN] ✅ User {roblox_id} successfully banned from group {group_id}")
-                    else:
-                        log.error(f"[ROBLOX] Ban failed for {roblox_id}: {r.status} - {resp_text}")
-                    return success
+                    print(f"[PURGE/BAN] Membership lookup → HTTP {r.status} | body: {resp_text[:200]}")
+                    if r.status != 200:
+                        log.error(f"[ROBLOX] Membership lookup failed for {roblox_id}: {r.status} - {resp_text}")
+                        return False
+                    data = await r.json(content_type=None)
+                memberships = data.get("groupMemberships", [])
+                if not memberships:
+                    print(f"[PURGE/BAN] User {roblox_id} has no membership in group {group_id} — nothing to remove.")
+                    return False
+                membership_path = memberships[0].get("path", "")
+                if not membership_path:
+                    print(f"[PURGE/BAN] Empty membership path for {roblox_id} — cannot delete.")
+                    return False
+
+                # Step 2: DELETE the membership (kicks the user from the group)
+                delete_url = f"{base}/apis/{membership_path}"
+                print(f"[PURGE/BAN] DELETE {delete_url}")
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.delete(delete_url, headers=_oc_headers()) as r:
+                        resp_text = await r.text()
+                        print(f"[PURGE/BAN] Delete response → HTTP {r.status} | body: {resp_text}")
+                        success = r.status in (200, 204)
+                        if success:
+                            log.info(f"[ROBLOX] Kicked user {roblox_id} from group {group_id} ({reason})")
+                            print(f"[PURGE/BAN] ✅ User {roblox_id} removed from group {group_id}")
+                        else:
+                            log.error(f"[ROBLOX] Kick failed for {roblox_id}: {r.status} - {resp_text}")
+                        return success
         except Exception as e:
             print(f"[PURGE/BAN] Exception: {e!r}")
             log.error(f"[ROBLOX] roblox_ban_user exception: {e!r}")
@@ -832,35 +854,16 @@ async def roblox_ban_user(roblox_id: str, group_id: str, reason: str = "Removed 
 
 async def roblox_unban_user(roblox_id: str, group_id: str) -> bool:
     """
-    Lift an existing ban from the Roblox group via Open Cloud v1 DELETE on the ban resource.
-    Used by /unban.
+    Attempt to unban / re-admit a user to the Roblox group.
+    NOTE: Roblox Open Cloud has no 'unban from group' endpoint.
+    The /unban command exists for record-keeping; actual re-admission requires
+    the user to send a new join request and an officer to accept it via /induct.
+    This function is a no-op stub and always returns False to signal that.
     """
-    if not ROBLOX_OPEN_CLOUD:
-        print(f"[UNBAN] Aborted — ROBLOX_OPEN_CLOUD key not set.")
-        return False
-    async with ROBLOX_SEMAPHORE:
-        try:
-            url = (
-                f"https://roblox-proxy.christiansuy25.workers.dev"
-                f"/apis/cloud/v1/groups/{group_id}/bans/users/{roblox_id}"
-            )
-            print(f"[UNBAN] DELETE {url}")
-            timeout = aiohttp.ClientTimeout(connect=10, sock_read=15)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.delete(url, headers=_oc_headers()) as r:
-                    resp_text = await r.text()
-                    print(f"[UNBAN] Unban response → HTTP {r.status} | body: {resp_text}")
-                    success = r.status in (200, 204)
-                    if success:
-                        log.info(f"[ROBLOX] Unbanned user {roblox_id} from group {group_id}")
-                        print(f"[UNBAN] ✅ User {roblox_id} successfully unbanned from group {group_id}")
-                    else:
-                        log.error(f"[ROBLOX] Unban failed for {roblox_id}: {r.status} - {resp_text}")
-                    return success
-        except Exception as e:
-            print(f"[UNBAN] Exception: {e!r}")
-            log.error(f"[ROBLOX] roblox_unban_user exception: {e!r}")
-            return False
+    print(f"[UNBAN] No Open Cloud endpoint exists to unban from a group. "
+          f"User {roblox_id} must re-apply to group {group_id} manually.")
+    log.warning(f"[ROBLOX] roblox_unban_user called for {roblox_id} — no OC endpoint available; manual re-induct required.")
+    return False
 
 
 
@@ -1600,6 +1603,20 @@ async def induct(interaction: discord.Interaction, users: str):
             print(f"[INDUCT] ✅ Done for {username} ({roblox_id})")
             log.info(f"[INDUCT] {username} inducted by {interaction.user}")
 
+            # ── Sync to CAV roster spreadsheet ──────────────────────────────
+            try:
+                await async_sync_induct(
+                    discord_id=str(discord_id),
+                    roblox_username=username,
+                    regiment_full_name="26e Chasseurs a Cheval de Ligne",
+                    rank_label="Cavalier",
+                )
+                print(f"[INDUCT] ✅ Sheet sync complete for {username}")
+            except Exception as _se:
+                print(f"[INDUCT] ⚠️ Sheet sync failed for {username}: {_se}")
+                log.error(f"[INDUCT] Sheet sync failed for {username}: {_se}")
+                # Non-fatal — Roblox rank and Discord roles already applied.
+
         except asyncio.TimeoutError:
             print(f"[INDUCT] ❌ Timeout for {discord_id}")
             embed = discord.Embed(
@@ -1622,36 +1639,8 @@ async def induct(interaction: discord.Interaction, users: str):
 #  /purge
 # ============================================================
 
-class PurgeActionSelect(discord.ui.Select):
-    def __init__(self):
-        super().__init__(
-            placeholder="Choose purge action…", min_values=1, max_values=1,
-            options=[
-                discord.SelectOption(
-                    label="Remove Only",
-                    value="remove",
-                    description="Strip all roles and kick from Roblox group — no blacklist",
-                ),
-                discord.SelectOption(
-                    label="Remove & Blacklist",
-                    value="blacklist",
-                    description="Strip roles, kick from group, AND add Admissions Blacklist role",
-                ),
-            ],
-        )
-    async def callback(self, interaction: discord.Interaction):
-        self.view.action = self.values[0]
-        await interaction.response.defer()
-        self.view.stop()
-
-class PurgeActionView(discord.ui.View):
-    def __init__(self, timeout: int = 60):
-        super().__init__(timeout=timeout)
-        self.action: str | None = None
-        self.add_item(PurgeActionSelect())
-
-@bot.tree.command(name="purge", description="Strip all roles, kick from Roblox group, and optionally blacklist.")
-@app_commands.describe(users="Mention one or more users to purge")
+@bot.tree.command(name="purge", description="Strip all roles, kick from Roblox group, and blacklist member(s).")
+@app_commands.describe(users="Mention one or more users to purge and blacklist")
 async def purge(interaction: discord.Interaction, users: str):
     if not has_command_permission(interaction, "purge"):
         await interaction.response.send_message("❌ You don't have permission.", ephemeral=True)
@@ -1663,20 +1652,9 @@ async def purge(interaction: discord.Interaction, users: str):
         await interaction.response.send_message("❌ No valid members mentioned.", ephemeral=True)
         return
 
-    action_view = PurgeActionView()
-    await interaction.response.send_message(
-        "**Purge:** Choose what to do with the selected member(s):",
-        view=action_view,
-        ephemeral=True,
-    )
-    await action_view.wait()
-    if action_view.action is None:
-        await interaction.edit_original_response(content="⏱️ Timed out.", view=None)
-        return
+    await interaction.response.send_message("⏳ Processing…", ephemeral=True)
 
-    do_blacklist = action_view.action == "blacklist"
-    print(f"[PURGE] Action selected: {'Remove & Blacklist' if do_blacklist else 'Remove Only'}")
-    await interaction.edit_original_response(content="⏳ Processing…", view=None)
+    do_blacklist = True  # /purge always blacklists
 
     for discord_id in mentions:
         try:
@@ -1703,8 +1681,8 @@ async def purge(interaction: discord.Interaction, users: str):
             avatar_url = await roblox_get_avatar_url(roblox_id) if roblox_id else None
 
             embed = discord.Embed(
-                title="Remove & Blacklist" if do_blacklist else "Remove",
-                color=discord.Color.dark_red() if do_blacklist else discord.Color.orange(),
+                title="Remove & Blacklist",
+                color=discord.Color.dark_red(),
             )
             embed.set_author(
                 name=f"{member.display_name}{' (' + username + ')' if username else ''}",
@@ -1730,26 +1708,17 @@ async def purge(interaction: discord.Interaction, users: str):
                     print(f"[PURGE] User {roblox_id} not in Cav group — skipping Roblox action")
                     status_lines.append("⚠️ Not in Cav Roblox group — skipping Roblox action.")
                 else:
-                    ban_reason = (
-                        "Purged & Blacklisted" if do_blacklist
-                        else "Removed from Corps de Cavalerie Impériale"
-                    )
+                    ban_reason = "Purged & Blacklisted"
                     print(f"[PURGE] Banning {roblox_id} from group {CAV_GROUP_ID} (reason: {ban_reason})…")
                     processed = await asyncio.wait_for(
                         roblox_ban_user(roblox_id, CAV_GROUP_ID, reason=ban_reason),
                         timeout=30,
                     )
                     print(f"[PURGE] Ban result: {processed}")
-                    if do_blacklist:
-                        status_lines.append(
-                            "✅ Permanently banned from Corps de Cavalerie Impériale (Roblox)." if processed
-                            else "❌ Failed to ban from Roblox group — handle manually."
-                        )
-                    else:
-                        status_lines.append(
-                            "✅ Banned from Corps de Cavalerie Impériale (Roblox). Use `/unban` to reverse." if processed
-                            else "❌ Failed to ban from Roblox group — handle manually."
-                        )
+                    status_lines.append(
+                        "✅ Kicked from Corps de Cavalerie Impériale (Roblox)." if processed
+                        else "❌ Failed to kick from Roblox group — handle manually."
+                    )
 
             # ── Discord role strip ───────────────────────────────────────────
             print(f"[PURGE] Stripping Discord roles for {member}…")
@@ -1765,39 +1734,43 @@ async def purge(interaction: discord.Interaction, users: str):
                 else "⚠️ No matching roles found to strip."
             )
 
-            # ── Optional blacklist ───────────────────────────────────────────
-            if do_blacklist:
-                bl_role = discord.utils.get(interaction.guild.roles, name=ADMISSIONS_BLACKLIST_ROLE)
-                if bl_role:
-                    if bl_role not in member.roles:
-                        try:
-                            await member.add_roles(bl_role, reason="Purged & blacklisted")
-                            print(f"[PURGE] Added {ADMISSIONS_BLACKLIST_ROLE} to {member}")
-                            status_lines.append(f"✅ Added **{ADMISSIONS_BLACKLIST_ROLE}**.")
-                        except discord.Forbidden:
-                            print(f"[PURGE] ⚠️ Forbidden adding {ADMISSIONS_BLACKLIST_ROLE} to {member}")
-                            status_lines.append(f"⚠️ Could not add **{ADMISSIONS_BLACKLIST_ROLE}** — check bot role hierarchy.")
-                    else:
-                        print(f"[PURGE] {member} already has {ADMISSIONS_BLACKLIST_ROLE}")
-                        status_lines.append(f"⚠️ **{ADMISSIONS_BLACKLIST_ROLE}** already applied.")
-                    if sheets_client and roblox_id:
-                        print(f"[PURGE] Logging {username} to Blacklisted sheet…")
-                        loop = asyncio.get_event_loop()
-                        await loop.run_in_executor(
-                            None,
-                            append_to_blacklisted_sheet,
-                            username or "Unknown",
-                            roblox_id,
-                            str(discord_id),
-                            member.display_name,
-                        )
-                        print(f"[PURGE] Sheet log complete.")
-                        status_lines.append("✅ Logged to Blacklisted spreadsheet.")
+            # ── Blacklist ────────────────────────────────────────────────────
+            bl_role = discord.utils.get(interaction.guild.roles, name=ADMISSIONS_BLACKLIST_ROLE)
+            if bl_role:
+                if bl_role not in member.roles:
+                    try:
+                        await member.add_roles(bl_role, reason="Purged & blacklisted")
+                        print(f"[PURGE] Added {ADMISSIONS_BLACKLIST_ROLE} to {member}")
+                        status_lines.append(f"✅ Added **{ADMISSIONS_BLACKLIST_ROLE}**.")
+                    except discord.Forbidden:
+                        print(f"[PURGE] ⚠️ Forbidden adding {ADMISSIONS_BLACKLIST_ROLE} to {member}")
+                        status_lines.append(f"⚠️ Could not add **{ADMISSIONS_BLACKLIST_ROLE}** — check bot role hierarchy.")
                 else:
-                    print(f"[PURGE] ⚠️ {ADMISSIONS_BLACKLIST_ROLE} role not found in server")
-                    status_lines.append(f"⚠️ **{ADMISSIONS_BLACKLIST_ROLE}** role not found in server.")
+                    print(f"[PURGE] {member} already has {ADMISSIONS_BLACKLIST_ROLE}")
+                    status_lines.append(f"⚠️ **{ADMISSIONS_BLACKLIST_ROLE}** already applied.")
             else:
-                status_lines.append("ℹ️ Blacklist skipped (Remove Only mode).")
+                print(f"[PURGE] ⚠️ {ADMISSIONS_BLACKLIST_ROLE} role not found in server")
+                status_lines.append(f"⚠️ **{ADMISSIONS_BLACKLIST_ROLE}** role not found in server.")
+
+            # ── Roster sheet sync + Blacklisted log ──────────────────────────
+            try:
+                found = await async_sync_purge(
+                    discord_id=str(discord_id),
+                    roblox_username=username or "Unknown",
+                    roblox_id=str(roblox_id) if roblox_id else "Unknown",
+                    display_name=member.display_name,
+                    blacklist=True,
+                )
+                if found:
+                    status_lines.append("✅ Removed from roster sheet and logged to Blacklisted tab.")
+                    print(f"[PURGE] ✅ Sheet sync complete for {username or discord_id}")
+                else:
+                    status_lines.append("⚠️ Not found in roster sheet — remove manually if needed.")
+                    print(f"[PURGE] ⚠️ {username or discord_id} not found in roster sheet")
+            except Exception as _se:
+                status_lines.append("⚠️ Roster sheet sync failed — update manually.")
+                print(f"[PURGE] ⚠️ Sheet sync failed for {username or discord_id}: {_se}")
+                log.error(f"[PURGE] Sheet sync failed for {username or discord_id}: {_se}")
 
             # ── Nickname reset ───────────────────────────────────────────────
             try:
@@ -1816,7 +1789,7 @@ async def purge(interaction: discord.Interaction, users: str):
                      + (f" • Roblox ID: {roblox_id}" if roblox_id else "")
             )
             print(f"[PURGE] ✅ Done for {username or discord_id}")
-            log.info(f"[PURGE] {member} purged (blacklist={do_blacklist}) by {interaction.user}")
+            log.info(f"[PURGE] {member} purged & blacklisted by {interaction.user}")
 
         except asyncio.TimeoutError:
             print(f"[PURGE] ❌ Timeout for {discord_id}")
@@ -1898,21 +1871,16 @@ async def unban(interaction: discord.Interaction, users: str):
 
             status_lines: list[str] = []
 
-            # ── Roblox unban ─────────────────────────────────────────────────
-            if not roblox_id:
-                print(f"[UNBAN] No Bloxlink verification for {discord_id} — skipping Roblox action")
-                status_lines.append("⚠️ Not verified with Bloxlink — skipping Roblox unban.")
-            else:
-                print(f"[UNBAN] Lifting Roblox ban for {roblox_id} in group {CAV_GROUP_ID}…")
-                unbanned = await asyncio.wait_for(
-                    roblox_unban_user(roblox_id, CAV_GROUP_ID),
-                    timeout=30,
-                )
-                print(f"[UNBAN] Unban result: {unbanned}")
+            # ── Roblox note ──────────────────────────────────────────────────
+            # Roblox Open Cloud has no endpoint to re-add a kicked member.
+            # The user must send a new join request; use /induct to accept it.
+            if roblox_id:
                 status_lines.append(
-                    "✅ Roblox group ban lifted. They may rejoin Corps de Cavalerie Impériale." if unbanned
-                    else "❌ Failed to lift Roblox ban — they may not have been banned, or check API key."
+                    "ℹ️ Roblox: no API endpoint exists to re-add to group. "
+                    "They must send a new join request; use **/induct** to accept it."
                 )
+            else:
+                status_lines.append("⚠️ Not verified with Bloxlink — cannot advise on Roblox re-admission.")
 
             # ── Discord role cleanup ──────────────────────────────────────────
             bl_role = discord.utils.get(interaction.guild.roles, name=ADMISSIONS_BLACKLIST_ROLE)
@@ -2339,6 +2307,20 @@ async def promote(interaction: discord.Interaction, members: str):
                 errors.append("missing permissions for regiment roles")
                 status_lines.append("❌ Missing permissions to modify regiment roles.")
 
+            # ── Sync draft to CAV roster spreadsheet ────────────────────────
+            # On a draft, the Roblox rank name is the brigade name (e.g. "BRIGADE KELLERMANN").
+            # We record that as the sheet rank label since it reflects their Roblox position.
+            try:
+                await async_sync_promote(
+                    discord_id=str(member.id),
+                    new_rank_label=target_brigade,
+                    roblox_username=username,
+                )
+                print(f"[PROMOTE/DRAFT] ✅ Sheet sync complete for {username or member}")
+            except Exception as _se:
+                print(f"[PROMOTE/DRAFT] ⚠️ Sheet sync failed for {username or member}: {_se}")
+                log.error(f"[PROMOTE/DRAFT] Sheet sync failed for {username or member}: {_se}")
+
             color = discord.Color.orange() if errors else discord.Color.dark_blue()
             embed = discord.Embed(title="Draft Results", color=color)
             embed.set_author(
@@ -2439,6 +2421,19 @@ async def promote(interaction: discord.Interaction, members: str):
         prev = current_rank or "no rank"
         print(f"[PROMOTE/RANK] ✅ {member}: {prev} → {target_rank}")
         log.info(f"[PROMOTE/RANK] {member} {prev} → {target_rank} by {interaction.user}")
+
+        # ── Sync rank to CAV roster spreadsheet ─────────────────────────
+        try:
+            await async_sync_promote(
+                discord_id=str(member.id),
+                new_rank_label=target_rank,
+                roblox_username=username,
+            )
+            print(f"[PROMOTE/RANK] ✅ Sheet sync complete for {username or member}")
+        except Exception as _se:
+            print(f"[PROMOTE/RANK] ⚠️ Sheet sync failed for {username or member}: {_se}")
+            log.error(f"[PROMOTE/RANK] Sheet sync failed for {username or member}: {_se}")
+
         return _make_embed(
             discord.Color.dark_blue(),
             f"✅ Promoted from **{prev}** → **{target_rank}**.",
