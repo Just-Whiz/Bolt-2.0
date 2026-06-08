@@ -610,7 +610,7 @@ PURGE_ROLES: set[str] = (
        "Citoyen", "Soldat", "Caporal", "Caporal Fourrier"}
 )
 
-ADMISSIONS_BLACKLIST_ROLE = "Admissions Blacklist"
+PURGED_ROLE = "Purged"
 
 # ============================================================
 #  COMMAND PERMISSIONS
@@ -1309,7 +1309,7 @@ async def on_ready():
     if real_guild:
         yard_channel = discord.utils.get(real_guild.text_channels, name="the-yard")
         if yard_channel:
-            bl_role = discord.utils.get(real_guild.roles, name=ADMISSIONS_BLACKLIST_ROLE)
+            bl_role = discord.utils.get(real_guild.roles, name=PURGED_ROLE)
             members_to_process = [
                 m for m in real_guild.members
                 if not m.bot
@@ -1361,7 +1361,7 @@ async def _blacklist_member(
     """
     try:
         # 1. Assign Discord Blacklist Role
-        bl_role = discord.utils.get(guild.roles, name=ADMISSIONS_BLACKLIST_ROLE)
+        bl_role = discord.utils.get(guild.roles, name=PURGED_ROLE)
         if bl_role and bl_role not in member.roles:
             await member.add_roles(bl_role, reason="Auto-blacklisted via the-yard")
 
@@ -1779,7 +1779,7 @@ async def purge(interaction: discord.Interaction, users: str):
                     print(f"[PURGE] User {roblox_id} not in Cav group — skipping Roblox action")
                     status_lines.append("⚠️ Not in Cav Roblox group — skipping Roblox action.")
                 else:
-                    ban_reason = "Purged & Blacklisted"
+                    ban_reason = "Purged & role stripped"
                     print(f"[PURGE] Banning {roblox_id} from group {CAV_GROUP_ID} (reason: {ban_reason})…")
                     processed = await asyncio.wait_for(
                         roblox_ban_user(roblox_id, CAV_GROUP_ID, reason=ban_reason),
@@ -1806,22 +1806,22 @@ async def purge(interaction: discord.Interaction, users: str):
             )
 
             # ── Blacklist ────────────────────────────────────────────────────
-            bl_role = discord.utils.get(interaction.guild.roles, name=ADMISSIONS_BLACKLIST_ROLE)
+            bl_role = discord.utils.get(interaction.guild.roles, name=PURGED_ROLE)
             if bl_role:
                 if bl_role not in member.roles:
                     try:
                         await member.add_roles(bl_role, reason="Purged")
-                        print(f"[PURGE] Added {ADMISSIONS_BLACKLIST_ROLE} to {member}")
-                        status_lines.append(f"✅ Added **{ADMISSIONS_BLACKLIST_ROLE}**.")
+                        print(f"[PURGE] Added {PURGED_ROLE} to {member}")
+                        status_lines.append(f"✅ Added **{PURGED_ROLE}**.")
                     except discord.Forbidden:
-                        print(f"[PURGE] ⚠️ Forbidden adding {ADMISSIONS_BLACKLIST_ROLE} to {member}")
-                        status_lines.append(f"⚠️ Could not add **{ADMISSIONS_BLACKLIST_ROLE}** — check bot role hierarchy.")
+                        print(f"[PURGE] ⚠️ Forbidden adding {PURGED_ROLE} to {member}")
+                        status_lines.append(f"⚠️ Could not add **{PURGED_ROLE}** — check bot role hierarchy.")
                 else:
-                    print(f"[PURGE] {member} already has {ADMISSIONS_BLACKLIST_ROLE}")
-                    status_lines.append(f"⚠️ **{ADMISSIONS_BLACKLIST_ROLE}** already applied.")
+                    print(f"[PURGE] {member} already has {PURGED_ROLE}")
+                    status_lines.append(f"⚠️ **{PURGED_ROLE}** already applied.")
             else:
-                print(f"[PURGE] ⚠️ {ADMISSIONS_BLACKLIST_ROLE} role not found in server")
-                status_lines.append(f"⚠️ **{ADMISSIONS_BLACKLIST_ROLE}** role not found in server.")
+                print(f"[PURGE] ⚠️ {PURGED_ROLE} role not found in server")
+                status_lines.append(f"⚠️ **{PURGED_ROLE}** role not found in server.")
 
             # ── Roster sheet sync + Blacklisted log ──────────────────────────
             try:
