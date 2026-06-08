@@ -1,7 +1,7 @@
 # ============================================================
 #  Bolt 2.0 — Corps de Cavalerie Impériale Discord Bot
 #  Updated: 2026-05-30
-#  Version: 1.2.0
+#  Version: 2.0.0
 # ============================================================
 
 import asyncio
@@ -23,7 +23,6 @@ from sheets_sync import (
     async_sync_promote,
     async_sync_promote_draft,
     async_sync_purge,
-    BRIGADE_TO_TABS,
 )
 
 load_dotenv()
@@ -217,22 +216,43 @@ BRIGADES: list[str] = [
     "BRIGADE BESSIÈRES",
 ]
 
-BRIGADE_REGIMENTS: dict[str, list[str]] = {
-    "BRIGADE KELLERMANN": ["26ème Régiment de Chasseurs à Cheval"],
-    "BRIGADE LASALLE":    ["5ème Chevau-Légers Lanciers", "10ème Régiment de Hussards"],
-    "BRIGADE BESSIÈRES":  ["Grenadiers à Cheval de la Garde Impériale"],
+# Maps brigade → ordered list of regiment tab keys shown in the dropdown.
+# To add a new regiment: append its tab key here and add entries below.
+BRIGADE_TO_REGIMENT_TABS: dict[str, list[str]] = {
+    "BRIGADE KELLERMANN": ["26e"],                  # add more tab keys here as needed
+    "BRIGADE LASALLE":    ["5e", "7e", "10e"],      # 10e has no sheet tab yet
+    "BRIGADE BESSIÈRES":  ["GaC", "CaC"],           # CaC has no sheet tab yet
+}
+
+# Human-readable dropdown label for each regiment tab key.
+# To add a new regiment: add its tab key → display label here.
+REGIMENT_TO_TAB_LABEL: dict[str, str] = {
+    "26e": "26e Chasseurs à Cheval de Ligne",
+    "5e":  "5e Chevaux Légers Lanciers",
+    "7e":  "7e Cuirassiers",
+    "10e": "10e Régiment de Hussards",
+    "GaC": "Grenadiers-à-Cheval de la Garde",
+    "CaC": "Chasseurs-à-Cheval de la Garde",
+}
+
+# Maps regiment tab key → Discord role name assigned on draft.
+# To add a new regiment: add its tab key → Discord role name here.
+TAB_TO_DISCORD_ROLE: dict[str, str] = {
+    "26e": "26ème Régiment de Chasseurs à Cheval",
+    "5e":  "5ème Chevau-Légers Lanciers",
+    "7e":  "7ème Cuirassiers",
+    "10e": "10ème Régiment de Hussards",
+    "GaC": "Grenadiers à Cheval de la Garde Impériale",
+    "CaC": "Chasseurs à Cheval de la Garde",
 }
 
 ALL_BRIGADE_ROLES:  set[str] = set(BRIGADES)
-ALL_REGIMENT_ROLES: set[str] = {r for regs in BRIGADE_REGIMENTS.values() for r in regs}
+ALL_REGIMENT_ROLES: set[str] = set(TAB_TO_DISCORD_ROLE.values())
 
-# Human-readable labels for regiment tab names (used in draft regiment dropdown)
-REGIMENT_TO_TAB_LABEL: dict[str, str] = {
-    "GaC": "Grenadiers-à-Cheval de la Garde",
-    "CaC": "Chasseurs-à-Cheval de la Garde",
-    "5e":  "5e Chevaux Légers Lanciers",
-    "7e":  "7e Cuirassiers",
-    "26e": "26e Chasseurs a Cheval de Ligne",
+# Legacy alias kept so sheet_sync imports still resolve.
+BRIGADE_REGIMENTS: dict[str, list[str]] = {
+    brigade: [TAB_TO_DISCORD_ROLE[tab] for tab in tabs if tab in TAB_TO_DISCORD_ROLE]
+    for brigade, tabs in BRIGADE_TO_REGIMENT_TABS.items()
 }
 
 # ============================================================
@@ -245,8 +265,8 @@ DISCORD_RANKS: list[str] = [
     "Cavalier",                       # 2
     "Brigadier",                      # 3
     "Brigadier-Fourrier",             # 4
-    "Marechal des Logis",             # 5
-    "Marechal des Logis-Chef",        # 6  ← SENIOR_THRESHOLD
+    "Maréchal des Logis",             # 5
+    "Maréchal des Logis-Chef",        # 6  ← SENIOR_THRESHOLD
     "Adjudant",                       # 7
     "Adjudant Sous-Officier",         # 8
     "Lieutenant en Second",           # 9
@@ -267,7 +287,7 @@ DISCORD_RANKS: list[str] = [
 DISCORD_RANK_INDEX: dict[str, int] = {name: i for i, name in enumerate(DISCORD_RANKS)}
 ALL_RANK_ROLES: set[str] = set(DISCORD_RANKS)
 DRAFT_RESET_RANK = "Cavalier"
-SENIOR_THRESHOLD = DISCORD_RANKS.index("Marechal des Logis-Chef")
+SENIOR_THRESHOLD = DISCORD_RANKS.index("Maréchal des Logis-Chef")
 
 SENIOR_PROMOTER_ROLES: set[str] = {
     "Administration Team",
@@ -542,6 +562,8 @@ INDUCT_REMOVE: list[str] = [
     "Soldat",
     "Caporal",
     "Caporal Fourrier",
+    # Strip all rank roles so re-induction always resets to a clean Cavalier state.
+    *DISCORD_RANKS,
 ]
 
 CAV_INDUCT_ROBLOX_RANK = "BRIGADE KELLERMANN"
@@ -1617,13 +1639,14 @@ async def induct(interaction: discord.Interaction, users: str):
 
             # ── Sync to CAV roster spreadsheet ──────────────────────────────
             try:
-                await async_sync_induct(
+                sheet_status_msg = await async_sync_induct(
                     discord_id=str(discord_id),
                     roblox_username=username,
                     regiment_full_name="26e Chasseurs a Cheval de Ligne",
                     rank_label="Cavalier",
                 )
-                print(f"[INDUCT] ✅ Sheet sync complete for {username}")
+                print(f"[INDUCT] ✅ Sheet sync complete for {username}: {sheet_status_msg}")
+            
             except Exception as _se:
                 print(f"[INDUCT] ⚠️ Sheet sync failed for {username}: {_se}")
                 log.error(f"[INDUCT] Sheet sync failed for {username}: {_se}")
@@ -1645,13 +1668,14 @@ async def induct(interaction: discord.Interaction, users: str):
             )
             log.error(f"[INDUCT] Error for {discord_id}: {e}")
 
+        status_lines.append(f"📊 {sheet_status_msg}")
         await interaction.followup.send(embed=embed)
 
 # ============================================================
 #  /purge
 # ============================================================
 
-@bot.tree.command(name="purge", description="Strip all roles, kick from Roblox group, and blacklist member(s).")
+@bot.tree.command(name="purge", description="Strip all roles, attempt to kick from Roblox group, and log purged member(s).")
 @app_commands.describe(users="Mention one or more users to purge and blacklist")
 async def purge(interaction: discord.Interaction, users: str):
     if not has_command_permission(interaction, "purge"):
@@ -1751,7 +1775,7 @@ async def purge(interaction: discord.Interaction, users: str):
             if bl_role:
                 if bl_role not in member.roles:
                     try:
-                        await member.add_roles(bl_role, reason="Purged & blacklisted")
+                        await member.add_roles(bl_role, reason="Purged")
                         print(f"[PURGE] Added {ADMISSIONS_BLACKLIST_ROLE} to {member}")
                         status_lines.append(f"✅ Added **{ADMISSIONS_BLACKLIST_ROLE}**.")
                     except discord.Forbidden:
@@ -1771,10 +1795,10 @@ async def purge(interaction: discord.Interaction, users: str):
                     roblox_username=username or "Unknown",
                     roblox_id=str(roblox_id) if roblox_id else "Unknown",
                     display_name=member.display_name,
-                    blacklist=True,
+                    purged=True,
                 )
                 if found:
-                    status_lines.append("✅ Removed from roster sheet and logged to Blacklisted tab.")
+                    status_lines.append("✅ Removed from roster sheet and logged to Purged tab.")
                     print(f"[PURGE] ✅ Sheet sync complete for {username or discord_id}")
                 else:
                     status_lines.append("⚠️ Not found in roster sheet — remove manually if needed.")
@@ -1820,119 +1844,6 @@ async def purge(interaction: discord.Interaction, users: str):
             log.error(f"[PURGE] Error for {discord_id}: {e}")
 
         await interaction.followup.send(embed=embed)
-
-# ============================================================
-#  /unban
-# ============================================================
-
-@bot.tree.command(name="unban", description="Lift a Roblox group ban placed by /purge.")
-@app_commands.describe(users="Mention one or more users to unban from the Roblox group")
-async def unban(interaction: discord.Interaction, users: str):
-    if not has_command_permission(interaction, "unban"):
-        await interaction.response.send_message("❌ You don't have permission.", ephemeral=True)
-        return
-
-    mentions = parse_mentions(users)
-    print(f"[UNBAN] Invoked by {interaction.user} for {len(mentions)} target(s): {mentions}")
-    if not mentions:
-        await interaction.response.send_message("❌ No valid members mentioned.", ephemeral=True)
-        return
-
-    await interaction.response.defer()
-
-    for discord_id in mentions:
-        embed = None
-        try:
-            print(f"[UNBAN] Processing target {discord_id}…")
-            member = interaction.guild.get_member(discord_id)
-            if not member:
-                try:
-                    member = await asyncio.wait_for(
-                        interaction.guild.fetch_member(discord_id), timeout=10
-                    )
-                except Exception:
-                    print(f"[UNBAN] ❌ Could not find Discord member {discord_id}")
-                    embed = discord.Embed(
-                        title="Unban Failed",
-                        description=f"❌ Could not find Discord member <@{discord_id}>.",
-                        color=discord.Color.red(),
-                    )
-                    await interaction.followup.send(embed=embed)
-                    continue
-
-            print(f"[UNBAN] Resolving Roblox for {discord_id}…")
-            roblox    = await resolve_roblox_user(str(discord_id))
-            roblox_id = roblox["roblox_id"]       if roblox else None
-            username  = roblox["roblox_username"]  if roblox else None
-            print(f"[UNBAN] Roblox resolved: username={username!r}, roblox_id={roblox_id!r}")
-            avatar_url = await roblox_get_avatar_url(roblox_id) if roblox_id else None
-
-            embed = discord.Embed(
-                title="Unban",
-                color=discord.Color.green(),
-            )
-            embed.set_author(
-                name=f"{member.display_name}{' (' + username + ')' if username else ''}",
-                icon_url=member.display_avatar.url,
-            )
-            if avatar_url:
-                embed.set_thumbnail(url=avatar_url)
-            embed.add_field(name="Discord", value=f"<@{discord_id}>", inline=True)
-            if username:
-                embed.add_field(name="Roblox", value=username, inline=True)
-
-            status_lines: list[str] = []
-
-            # ── Roblox note ──────────────────────────────────────────────────
-            # Roblox Open Cloud has no endpoint to re-add a kicked member.
-            # The user must send a new join request; use /induct to accept it.
-            if roblox_id:
-                status_lines.append(
-                    "ℹ️ Roblox: no API endpoint exists to re-add to group. "
-                    "They must send a new join request; use **/induct** to accept it."
-                )
-            else:
-                status_lines.append("⚠️ Not verified with Bloxlink — cannot advise on Roblox re-admission.")
-
-            # ── Discord role cleanup ──────────────────────────────────────────
-            bl_role = discord.utils.get(interaction.guild.roles, name=ADMISSIONS_BLACKLIST_ROLE)
-            if bl_role and bl_role in member.roles:
-                try:
-                    await member.remove_roles(bl_role, reason=f"Unbanned by {interaction.user}")
-                    print(f"[UNBAN] Removed {ADMISSIONS_BLACKLIST_ROLE} from {member}")
-                    status_lines.append(f"✅ Removed **{ADMISSIONS_BLACKLIST_ROLE}** role.")
-                except discord.Forbidden:
-                    print(f"[UNBAN] ⚠️ Forbidden removing {ADMISSIONS_BLACKLIST_ROLE} from {member}")
-                    status_lines.append(f"⚠️ Could not remove **{ADMISSIONS_BLACKLIST_ROLE}** — check bot role hierarchy.")
-            else:
-                status_lines.append(f"ℹ️ **{ADMISSIONS_BLACKLIST_ROLE}** role was not applied — no change.")
-
-            embed.add_field(name="Actions", value="\n".join(status_lines), inline=False)
-            embed.set_footer(
-                text=f"Unbanned by {interaction.user}"
-                     + (f" • Roblox ID: {roblox_id}" if roblox_id else "")
-            )
-            print(f"[UNBAN] ✅ Done for {username or discord_id}")
-            log.info(f"[UNBAN] {member} unbanned by {interaction.user}")
-
-        except asyncio.TimeoutError:
-            print(f"[UNBAN] ❌ Timeout for {discord_id}")
-            embed = discord.Embed(
-                title="Unban Failed",
-                description=f"❌ A request timed out for <@{discord_id}>.",
-                color=discord.Color.red(),
-            )
-        except Exception as e:
-            print(f"[UNBAN] ❌ Exception for {discord_id}: {type(e).__name__}: {e}")
-            embed = discord.Embed(
-                title="Unban Error",
-                description=f"❌ Unexpected error for <@{discord_id}>: `{type(e).__name__}: {e}`",
-                color=discord.Color.red(),
-            )
-            log.error(f"[UNBAN] Error for {discord_id}: {e}")
-
-        if embed:
-            await interaction.followup.send(embed=embed)
 
 # ============================================================
 #  /medal-sync
@@ -2263,30 +2174,29 @@ async def promote(interaction: discord.Interaction, members: str):
             return
 
         target_brigade = brigade_view.target_brigade
-        regiment_names = BRIGADE_REGIMENTS[target_brigade]
 
-        # Step 3: if this brigade has multiple regiment tabs, ask which one
-        available_tabs = BRIGADE_TO_TABS.get(target_brigade, [])
-        if len(available_tabs) > 1:
-            reg_view = SingleSelectView(RegimentSelect(available_tabs))
-            await interaction.edit_original_response(
-                content="**Step 3:** Select the specific regiment for this draftee:", view=reg_view
-            )
-            await reg_view.wait()
-            if reg_view.target_tab is None:
-                await interaction.edit_original_response(content="⏱️ Timed out.", view=None)
-                return
-            target_tab = reg_view.target_tab
-        else:
-            target_tab = available_tabs[0] if available_tabs else None
+        # Step 3: always ask which regiment within the brigade
+        available_tabs = BRIGADE_TO_REGIMENT_TABS.get(target_brigade, [])
+        reg_view = SingleSelectView(RegimentSelect(available_tabs))
+        await interaction.edit_original_response(
+            content="**Step 3:** Select the regiment to draft target(s) into:", view=reg_view
+        )
+        await reg_view.wait()
+        if reg_view.target_tab is None:
+            await interaction.edit_original_response(content="⏱️ Timed out.", view=None)
+            return
+        target_tab = reg_view.target_tab
+
+        # The single Discord role to assign for the chosen regiment
+        regiment_names = [TAB_TO_DISCORD_ROLE[target_tab]] if target_tab in TAB_TO_DISCORD_ROLE else []
 
         await interaction.edit_original_response(content="⏳ Processing draft…", view=None)
 
         async def draft_one(member: discord.Member) -> discord.Embed:
             print(f"[PROMOTE/DRAFT] Processing {member} → {target_brigade}")
-            roblox     = await resolve_roblox_user(str(member.id))
-            roblox_id  = roblox["roblox_id"]  if roblox else None
-            username   = roblox["roblox_username"] if roblox else None
+            roblox = await resolve_roblox_user(str(member.id))
+            roblox_id = roblox["roblox_id"]  if roblox else None
+            username = roblox["roblox_username"] if roblox else None
             avatar_url = await roblox_get_avatar_url(roblox_id) if roblox_id else None
             print(f"[PROMOTE/DRAFT] Roblox resolved: {username!r} ({roblox_id!r})")
 
@@ -2358,14 +2268,14 @@ async def promote(interaction: discord.Interaction, members: str):
             # and updates the Stats map, preserving their original drafted date.
             if target_tab:
                 try:
-                    await async_sync_promote_draft(
+                    sheet_status_msg = await async_sync_promote_draft(
                         discord_id=str(member.id),
                         roblox_username=username or str(member.id),
                         target_brigade=target_brigade,
                         target_tab=target_tab,
                     )
-                    print(f"[PROMOTE/DRAFT] ✅ Sheet sync complete for {username or member} → {target_tab}")
-                    status_lines.append(f"✅ Roster moved to **{target_tab}** tab (rank reset to Cavalier).")
+                    print(f"[PROMOTE/DRAFT] ✅ Sheet sync complete for {username or member} → {target_tab}: {sheet_status_msg}")
+                    status_lines.append(f"✅ Roster moved to **{target_tab}** tab: {sheet_status_msg}.")
                 except Exception as _se:
                     print(f"[PROMOTE/DRAFT] ⚠️ Sheet sync failed for {username or member}: {_se}")
                     log.error(f"[PROMOTE/DRAFT] Sheet sync failed for {username or member}: {_se}")
@@ -2449,15 +2359,18 @@ async def promote(interaction: discord.Interaction, members: str):
                            + (f" • Roblox ID: {roblox_id}" if roblox_id else ""))
             return emb
 
-        if current_idx >= target_rank_idx:
-            return _make_embed(
-                discord.Color.orange(),
-                f"⚠️ Already holds **{current_rank}**, equal to or above **{target_rank}**. Skipped.",
-            )
+        # Block only if the executor doesn't outrank the target (and isn't senior).
+        # Intentionally allow assigning the same rank or a lower one — this handles
+        # re-induction resets and any deliberate rank corrections by staff.
         if current_idx >= exec_idx and not senior:
             return _make_embed(
                 discord.Color.red(),
-                "❌ Cannot promote someone of equal or higher rank.",
+                "❌ Cannot modify the rank of someone equal to or above you.",
+            )
+        if current_idx == target_rank_idx:
+            return _make_embed(
+                discord.Color.orange(),
+                f"⚠️ **{current_rank}** is already the target rank. No change made.",
             )
         new_role = discord.utils.get(interaction.guild.roles, name=target_rank)
         if not new_role:

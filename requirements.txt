@@ -6,3 +6,4 @@ aiohttp
 flask
 cloudflared
 httpx
+google-api-python-client
