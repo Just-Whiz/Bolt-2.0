@@ -1,6 +1,6 @@
 # ============================================================
 #  Bolt 2.0 — Corps de Cavalerie Impériale Discord Bot
-#  Updated: 2026-05-30
+#  Updated: 06-08-2026
 #  Version: 2.0.0
 # ============================================================
 
@@ -617,7 +617,6 @@ COMMAND_PERMISSIONS: dict[str, set[str]] = {
     "background-check": {"@everyone"},
     "induct": {"Recruitment Team"} | _STAFF_ROLES,
     "purge": SENIOR_PROMOTER_ROLES,
-    "unban": SENIOR_PROMOTER_ROLES,
     "promote": _STAFF_ROLES,
     "medal-sync": {"@everyone"},
     "export-rosters": _STAFF_ROLES,

@@ -250,7 +250,7 @@ def _insert_row_with_formulas(
     # Access the underlying google-auth credentials from the gspread client.
     import googleapiclient.discovery  # type: ignore
 
-    creds = _get_client().auth_credentials  # google.oauth2.service_account.Credentials
+    creds = _get_client().http_client.auth  # google.oauth2.service_account.Credentials
     service = googleapiclient.discovery.build("sheets", "v4", credentials=creds, cache_discovery=False)
 
     tab_title = ws.title
@@ -737,13 +737,13 @@ async def async_sync_purge(
     roblox_username: str,
     roblox_id: str,
     display_name: str,
-    blacklist: bool,
+    purged: bool,
 ) -> bool:
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         None,
         sync_purge,
-        discord_id, roblox_username, roblox_id, display_name, blacklist,
+        discord_id, roblox_username, roblox_id, display_name, purged,
     )
 
 
