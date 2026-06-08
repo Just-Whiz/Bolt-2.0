@@ -1,6 +1,6 @@
 # ============================================================
 #  Bolt 2.0 — Corps de Cavalerie Impériale Discord Bot
-#  Updated: 06-08-2026
+#  Updated: 2026-05-30
 #  Version: 2.0.0
 # ============================================================
 
@@ -48,6 +48,17 @@ def _oc_headers() -> dict:
 
 HTTP_TIMEOUT = aiohttp.ClientTimeout(connect=10, sock_read=15)
 ROBLOX_SEMAPHORE = asyncio.Semaphore(3)
+
+# Persistent httpx client — reused across all Roblox API calls so that the
+# TLS connection to the Cloudflare Worker is kept alive instead of being
+# torn down and re-established on every request (the main source of slowness).
+_http: httpx.AsyncClient | None = None
+
+def get_http() -> httpx.AsyncClient:
+    global _http
+    if _http is None or _http.is_closed:
+        _http = httpx.AsyncClient(timeout=15, http2=False)
+    return _http
 
 # ============================================================
 #  LOGGING
@@ -669,12 +680,11 @@ async def cache_user(discord_id: str, roblox_id: str, username: str, discord_use
 async def roblox_get_user_info(roblox_id: str) -> dict:
     async with ROBLOX_SEMAPHORE:
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                r = await client.get(f"https://roblox-proxy.christiansuy25.workers.dev/users/v1/users/{roblox_id}")
-                if r.status_code != 200:
-                    print(f"[ROBLOX] roblox_get_user_info {roblox_id} HTTP {r.status_code}: {r.text[:100]}")
-                    return {}
-                data = r.json()
+            r = await get_http().get(f"https://roblox-proxy.christiansuy25.workers.dev/users/v1/users/{roblox_id}")
+            if r.status_code != 200:
+                print(f"[ROBLOX] roblox_get_user_info {roblox_id} HTTP {r.status_code}: {r.text[:100]}")
+                return {}
+            data = r.json()
         except Exception as e:
             print(f"[ROBLOX] roblox_get_user_info {roblox_id} {type(e).__name__}: {e!r}")
             return {}
@@ -700,41 +710,38 @@ async def roblox_get_username(roblox_id: str) -> str | None:
 async def roblox_get_previous_usernames(roblox_id: str) -> str:
     async with ROBLOX_SEMAPHORE:
         try:
-            async with httpx.AsyncClient(timeout=15) as s:
-                r = await s.get(f"https://roblox-proxy.christiansuy25.workers.dev/users/v1/users/{roblox_id}/username-history?limit=10")
-                if r.status_code != 200:
-                    return "None"
-                names = [e["name"] for e in r.json().get("data", [])]
-                return ", ".join(names) if names else "None"
+            r = await get_http().get(f"https://roblox-proxy.christiansuy25.workers.dev/users/v1/users/{roblox_id}/username-history?limit=10")
+            if r.status_code != 200:
+                return "None"
+            names = [e["name"] for e in r.json().get("data", [])]
+            return ", ".join(names) if names else "None"
         except Exception:
             return "None"
 
 async def roblox_get_avatar_url(roblox_id: str) -> str | None:
     async with ROBLOX_SEMAPHORE:
         try:
-            async with httpx.AsyncClient(timeout=15) as s:
-                r = await s.get(
-                    f"https://roblox-proxy.christiansuy25.workers.dev/thumbnails/v1/users/avatar-headshot"
-                    f"?userIds={roblox_id}&size=150x150&format=Png&isCircular=false"
-                )
-                if r.status_code != 200:
-                    return None
-                entries = r.json().get("data", [])
-                return entries[0].get("imageUrl") if entries else None
+            r = await get_http().get(
+                f"https://roblox-proxy.christiansuy25.workers.dev/thumbnails/v1/users/avatar-headshot"
+                f"?userIds={roblox_id}&size=150x150&format=Png&isCircular=false"
+            )
+            if r.status_code != 200:
+                return None
+            entries = r.json().get("data", [])
+            return entries[0].get("imageUrl") if entries else None
         except Exception:
             return None
 
 async def roblox_get_group_memberships(roblox_id: str) -> list[dict]:
     async with ROBLOX_SEMAPHORE:
         try:
-            async with httpx.AsyncClient(timeout=15) as s:
-                r = await s.get(f"https://roblox-proxy.christiansuy25.workers.dev/groups/v2/users/{roblox_id}/groups/roles")
-                if r.status_code != 200:
-                    return []
-                return [
-                    {"name": e["group"]["name"], "id": str(e["group"]["id"]), "rank": e["role"]["name"]}
-                    for e in r.json().get("data", [])
-                ]
+            r = await get_http().get(f"https://roblox-proxy.christiansuy25.workers.dev/groups/v2/users/{roblox_id}/groups/roles")
+            if r.status_code != 200:
+                return []
+            return [
+                {"name": e["group"]["name"], "id": str(e["group"]["id"]), "rank": e["role"]["name"]}
+                for e in r.json().get("data", [])
+            ]
         except Exception as e:
             print(f"[ROBLOX] roblox_get_group_memberships error: {e!r}")
             return []
@@ -750,25 +757,25 @@ async def roblox_accept_join_request(roblox_id: str, group_id: str) -> bool:
         return False
     async with ROBLOX_SEMAPHORE:
         try:
-            async with httpx.AsyncClient(timeout=15) as s:
-                r = await s.get(
-                    f"https://roblox-proxy.christiansuy25.workers.dev/apis/cloud/v2/groups/{group_id}/join-requests",
-                    headers=_oc_headers(), params={"maxPageSize": 100},
-                )
-                if r.status_code != 200:
-                    return False
-                data = r.json()
-                request_path = next(
-                    (req.get("path") for req in data.get("groupJoinRequests", [])
-                     if str(roblox_id) in req.get("user", "")), None,
-                )
-                if not request_path:
-                    return False
-                r = await s.post(
-                    f"https://roblox-proxy.christiansuy25.workers.dev/apis/cloud/v2/{request_path}:accept",
-                    headers=_oc_headers(), json={},
-                )
-                return r.status_code in (200, 204)
+            s = get_http()
+            r = await s.get(
+                f"https://roblox-proxy.christiansuy25.workers.dev/apis/cloud/v2/groups/{group_id}/join-requests",
+                headers=_oc_headers(), params={"maxPageSize": 100},
+            )
+            if r.status_code != 200:
+                return False
+            data = r.json()
+            request_path = next(
+                (req.get("path") for req in data.get("groupJoinRequests", [])
+                 if str(roblox_id) in req.get("user", "")), None,
+            )
+            if not request_path:
+                return False
+            r = await s.post(
+                f"https://roblox-proxy.christiansuy25.workers.dev/apis/cloud/v2/{request_path}:accept",
+                headers=_oc_headers(), json={},
+            )
+            return r.status_code in (200, 204)
         except Exception as e:
             print(f"[ROBLOX] accept_join_request error: {e!r}")
             return False
@@ -778,51 +785,51 @@ async def roblox_set_rank(roblox_id: str, group_id: str, rank_name: str) -> bool
         return False
     async with ROBLOX_SEMAPHORE:
         try:
-            async with httpx.AsyncClient(timeout=15) as s:
-                all_roles, page_token = [], None
-                while True:
-                    params = {"maxPageSize": 20}
-                    if page_token:
-                        params["pageToken"] = page_token
-                    r = await s.get(
-                        f"https://roblox-proxy.christiansuy25.workers.dev/apis/cloud/v2/groups/{group_id}/roles",
-                        headers=_oc_headers(), params=params,
-                    )
-                    if r.status_code != 200:
-                        return False
-                    rd = r.json()
-                    all_roles.extend(rd.get("groupRoles", []))
-                    page_token = rd.get("nextPageToken") or ""
-                    if not page_token:
-                        break
-
-                role_path = next(
-                    (role.get("path") for role in all_roles
-                     if (role.get("displayName") or role.get("name") or "").strip().lower()
-                     == rank_name.strip().lower()), None,
-                )
-                if not role_path:
-                    return False
-
+            s = get_http()
+            all_roles, page_token = [], None
+            while True:
+                params = {"maxPageSize": 20}
+                if page_token:
+                    params["pageToken"] = page_token
                 r = await s.get(
-                    f"https://roblox-proxy.christiansuy25.workers.dev/apis/cloud/v2/groups/{group_id}/memberships",
-                    headers=_oc_headers(),
-                    params={"filter": f"user == 'users/{roblox_id}'"},
+                    f"https://roblox-proxy.christiansuy25.workers.dev/apis/cloud/v2/groups/{group_id}/roles",
+                    headers=_oc_headers(), params=params,
                 )
                 if r.status_code != 200:
                     return False
-                memberships = r.json().get("groupMemberships", [])
-                if not memberships:
-                    return False
+                rd = r.json()
+                all_roles.extend(rd.get("groupRoles", []))
+                page_token = rd.get("nextPageToken") or ""
+                if not page_token:
+                    break
 
-                r = await s.patch(
-                    f"https://roblox-proxy.christiansuy25.workers.dev/apis/cloud/v2/{memberships[0]['path']}",
-                    headers=_oc_headers(), json={"role": role_path},
-                )
-                success = r.status_code in (200, 204)
-                if success:
-                    log.info(f"[ROBLOX] Ranked {roblox_id} → '{rank_name}' in {group_id}")
-                return success
+            role_path = next(
+                (role.get("path") for role in all_roles
+                 if (role.get("displayName") or role.get("name") or "").strip().lower()
+                 == rank_name.strip().lower()), None,
+            )
+            if not role_path:
+                return False
+
+            r = await s.get(
+                f"https://roblox-proxy.christiansuy25.workers.dev/apis/cloud/v2/groups/{group_id}/memberships",
+                headers=_oc_headers(),
+                params={"filter": f"user == 'users/{roblox_id}'"},
+            )
+            if r.status_code != 200:
+                return False
+            memberships = r.json().get("groupMemberships", [])
+            if not memberships:
+                return False
+
+            r = await s.patch(
+                f"https://roblox-proxy.christiansuy25.workers.dev/apis/cloud/v2/{memberships[0]['path']}",
+                headers=_oc_headers(), json={"role": role_path},
+            )
+            success = r.status_code in (200, 204)
+            if success:
+                log.info(f"[ROBLOX] Ranked {roblox_id} → '{rank_name}' in {group_id}")
+            return success
         except Exception as e:
             print(f"[ROBLOX] roblox_set_rank error: {e!r}")
             return False
@@ -1417,6 +1424,12 @@ async def background_check(interaction: discord.Interaction, users: str):
 
     mentions = parse_mentions(users)
     print(f"[BG-CHECK] Invoked by {interaction.user} for {len(mentions)} target(s): {mentions}")
+    if not mentions:
+        await interaction.response.send_message(
+            "❌ No valid members mentioned. Please @mention one or more users.",
+            ephemeral=True,
+        )
+        return
     await interaction.response.defer()
 
     for discord_id in mentions:
