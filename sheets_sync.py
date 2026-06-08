@@ -250,7 +250,7 @@ def _insert_row_with_formulas(
     # Access the underlying google-auth credentials from the gspread client.
     import googleapiclient.discovery  # type: ignore
 
-    creds = _get_client().auth  # google.oauth2.service_account.Credentials
+    creds = _get_client().auth_credentials  # google.oauth2.service_account.Credentials
     service = googleapiclient.discovery.build("sheets", "v4", credentials=creds, cache_discovery=False)
 
     tab_title = ws.title
