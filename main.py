@@ -533,26 +533,50 @@ VENERATION_ROLE_MAP: dict[str, str] = {
 VENERATION_ACTIVE_STATUSES: set[str] = {"approved", "active"}
 
 # ── Nobility mapping ─────────────────────────────────────────
-# Ordered lowest → highest tier so prefix precedence works (higher tier wins).
+# Ordered lowest → highest tier so tier-precedence works (higher tier wins).
 # Keys match the grade value in the sheet's second data column.
-# Values: (Discord role name, nickname prefix)
+# Values: (Discord role name, nick_format)
+#   nick_format uses {username} as a placeholder for the Roblox username.
+#   Chevalier:  "Sir {username}, Chevalier"
+#   Baron:      "Baron {username}"
+#   Comte:      "Comte {username}"
+#   Duc:        "Duc {username}"
 NOBILITY_ROLE_MAP: dict[str, tuple[str, str]] = {
-    "Chevalier": ("Chevalier d'Empire", "Chv."),
-    "Baron":     ("Baron d'Empire",     "Bon."),
-    "Comte":     ("Comte d'Empire",     "Cte."),
-    "Duc":       ("Duc d'Empire",       "Duc"),
+    "Chevalier": ("Chevalier d'Empire", "Sir {username}, Chevalier"),
+    "Baron":     ("Baron d'Empire",     "Baron {username}"),
+    "Comte":     ("Comte d'Empire",     "Comte {username}"),
+    "Duc":       ("Duc d'Empire",       "Duc {username}"),
 }
 
-# Kept for backward-compat with /background-check (role → prefix lookup)
+def format_nobility_nick(grade: str, username: str) -> str:
+    """Return the full nobility nickname for a given grade and Roblox username."""
+    _, fmt = NOBILITY_ROLE_MAP.get(grade, ("", "{username}"))
+    return fmt.format(username=username)[:32]
+
+def strip_nobility_nick(nick: str) -> str:
+    """Strip any nobility title formatting from a nickname, returning the bare username."""
+    # Chevalier format: "Sir X, Chevalier" → "X"
+    import re as _re
+    m = _re.match(r"^Sir (.+), Chevalier$", nick)
+    if m:
+        return m.group(1)
+    # Prefixed formats: "Baron X", "Comte X", "Duc X"
+    for _grade, (_role, fmt) in NOBILITY_ROLE_MAP.items():
+        prefix = fmt.split("{username}")[0]
+        if prefix and nick.startswith(prefix):
+            return nick[len(prefix):]
+    return nick
+
+# Kept for backward-compat — maps Discord role name → grade key
 NOBILITY_PREFIXES: dict[str, str] = {
-    role: prefix for _grade, (role, prefix) in NOBILITY_ROLE_MAP.items()
+    role: grade for grade, (role, _fmt) in NOBILITY_ROLE_MAP.items()
 }
 
 # All Discord roles that originate from sheet data (used by PURGE_ROLES)
 ALL_SHEET_ROLES: set[str] = (
     set(MEDAL_AWARD_MAP.values())
     | set(VENERATION_ROLE_MAP.values())
-    | {role for _grade, (role, _prefix) in NOBILITY_ROLE_MAP.items()}
+    | {role for _grade, (role, _fmt) in NOBILITY_ROLE_MAP.items()}
 )
 
 # ============================================================
@@ -575,6 +599,7 @@ INDUCT_REMOVE: list[str] = [
     "Caporal Fourrier",
     # Strip all rank roles so re-induction always resets to a clean Cavalier state.
     *DISCORD_RANKS,
+    *BRIGADES,
 ]
 
 CAV_INDUCT_ROBLOX_RANK = "BRIGADE KELLERMANN"
@@ -1132,18 +1157,23 @@ def sheet_load_venerations() -> dict[str, set[str]]:
     return result
 
 def sheet_load_nobility() -> tuple[dict[str, set[str]], dict[str, str]]:
-    """Read Nobility tab → ({roblox_id: {discord_role, …}}, {roblox_id: nick_prefix})
+    """Read Nobility tab → ({roblox_id: {discord_role, …}}, {roblox_id: grade})
+
+    The second dict maps each Roblox ID to their highest-tier nobility grade key
+    (e.g. "Chevalier", "Baron", "Comte", "Duc") so callers can use
+    format_nobility_nick(grade, username) to build the correct nickname.
 
     Keyed by Roblox ID extracted from the Profile Link column (col G, index 6).
     """
     role_result: dict[str, set[str]] = {}
-    prefix_result: dict[str, str] = {}
+    grade_result: dict[str, str] = {}   # roblox_id -> highest grade key
+    tiers = list(NOBILITY_ROLE_MAP.keys())  # ordered lowest to highest
     for ws in _get_worksheets("Nobility"):
         try:
             rows = ws.get_all_values()
             headers = rows[0] if rows else []
             col_p = next((i for i, h in enumerate(headers) if h.strip().lower() == "profile link"), 6)
-            col_g = _col(headers, " ")        # sheet's grade/class column has a space header
+            col_g = _col(headers, " ")        # sheet grade/class column has a space header
             col_s = _col(headers, "Stage")
             for row in rows[1:]:
                 if len(row) <= max(col_p, col_g, col_s):
@@ -1161,24 +1191,21 @@ def sheet_load_nobility() -> tuple[dict[str, set[str]], dict[str, str]]:
                 if not entry:
                     log.debug(f"[SHEETS][NOBILITY] Unmapped grade '{grade}' for Roblox ID '{roblox_id}'")
                     continue
-                discord_role, nick_prefix = entry
+                discord_role, _fmt = entry
                 role_result.setdefault(roblox_id, set()).add(discord_role)
-                # Keep highest-tier prefix for this user
-                tiers    = list(NOBILITY_ROLE_MAP.keys())
-                existing = prefix_result.get(roblox_id)
-                if existing is None or tiers.index(grade) > tiers.index(
-                    next(k for k, (r, p) in NOBILITY_ROLE_MAP.items() if p == existing), grade
-                ):
-                    prefix_result[roblox_id] = nick_prefix
+                # Keep the highest-tier grade for this user
+                existing_grade = grade_result.get(roblox_id)
+                if existing_grade is None or tiers.index(grade) > tiers.index(existing_grade):
+                    grade_result[roblox_id] = grade
         except Exception as e:
             log.error(f"[SHEETS][NOBILITY] sheet_load_nobility error: {e}")
-    return role_result, prefix_result
+    return role_result, grade_result
 
 def sheet_load_all() -> tuple[
     dict[str, set[str]], # medals    {username_lower → {discord_role, …}}
     dict[str, set[str]], # venerations
     dict[str, set[str]], # nobility roles
-    dict[str, str], # nobility nick prefixes
+    dict[str, str], # nobility grade keys (e.g. "Duc")
 ]:
     """Load all three active tabs from the French medals spreadsheet."""
     medals = sheet_load_medals()
@@ -1472,34 +1499,30 @@ async def background_check(interaction: discord.Interaction, users: str):
             loop = asyncio.get_event_loop()
             _, nobility_p = await loop.run_in_executor(None, sheet_load_nobility)
             nobility_text = "None"
-            nick_prefix   = nobility_p.get(roblox_id)
-            if nick_prefix and member:
-                nobility_text = f"Title prefix: **{nick_prefix}**"
-                title_role = next(
-                    (r for t, (r, p) in NOBILITY_ROLE_MAP.items() if p == nick_prefix), None
-                )
-                if title_role:
-                    disc_role = discord.utils.get(interaction.guild.roles, name=title_role)
-                    if disc_role and disc_role not in member.roles:
-                        try:
-                            await member.add_roles(disc_role, reason="Nobility found in sheet")
-                            nobility_text += " ✅ role assigned"
-                        except discord.Forbidden:
-                            nobility_text += " ⚠️ (could not assign role)"
+            nob_grade = nobility_p.get(roblox_id)  # highest grade key, e.g. "Duc"
+            if nob_grade and member:
+                title_role_name, _fmt = NOBILITY_ROLE_MAP[nob_grade]
+                nobility_text = f"Title: **{nob_grade}** ({title_role_name})"
+                disc_role = discord.utils.get(interaction.guild.roles, name=title_role_name)
+                if disc_role and disc_role not in member.roles:
+                    try:
+                        await member.add_roles(disc_role, reason="Nobility found in sheet")
+                        nobility_text += " ✅ role assigned"
+                    except discord.Forbidden:
+                        nobility_text += " ⚠️ (could not assign role)"
 
+                # Roblox username for nickname formatting
+                roblox_username_for_nick = roblox.get("roblox_username", "") if roblox else username
+                new_nick = format_nobility_nick(nob_grade, roblox_username_for_nick)
                 current_nick = member.nick or member.display_name
-                if not current_nick.startswith(nick_prefix):
-                    base = current_nick
-                    for _, pfx in NOBILITY_ROLE_MAP.values():
-                        if base.startswith(pfx + " "):
-                            base = base[len(pfx) + 1:]
-                            break
-                    new_nick = f"{nick_prefix} {base}"[:32]
+                if current_nick != new_nick:
                     try:
                         await member.edit(nick=new_nick, reason="Nobility title applied")
                         nobility_text += f" ✅ nick → {new_nick}"
                     except discord.Forbidden:
                         nobility_text += " ⚠️ (could not update nick)"
+                else:
+                    nobility_text += " ✅ nick already correct"
 
             embed = discord.Embed(title="Background Check Results", color=discord.Color.dark_blue())
             if avatar_url:
@@ -1892,7 +1915,7 @@ async def medal_sync(interaction: discord.Interaction, users: str):
 
     loop = asyncio.get_event_loop()
     try:
-        medals_data, veneration_data, nobility_roles, nobility_prefixes = await loop.run_in_executor(
+        medals_data, veneration_data, nobility_roles, nobility_grades = await loop.run_in_executor(
             None, sheet_load_all
         )
     except Exception as exc:
@@ -2022,24 +2045,19 @@ async def medal_sync(interaction: discord.Interaction, users: str):
             log.info(f"[MEDAL-SYNC] No venerations found for '{roblox_username}' (ID: {roblox_id_key})")
 
         # ── Nobility (Nobility tab) ──────────────────────────────────────────
-        nob_roles  = nobility_roles.get(roblox_id_key, set())
-        nob_prefix = nobility_prefixes.get(roblox_id_key)
+        nob_roles = nobility_roles.get(roblox_id_key, set())
+        nob_grade = nobility_grades.get(roblox_id_key)  # highest grade key, e.g. "Duc"
         if nob_roles:
-            print(f"[MEDAL-SYNC]   NOBILITY FOUND ({len(nob_roles)}): {nob_roles} | prefix='{nob_prefix}'")
-            log.info(f"[MEDAL-SYNC] '{roblox_username}' nobility from sheet: {nob_roles} prefix='{nob_prefix}'")
+            print(f"[MEDAL-SYNC]   NOBILITY FOUND ({len(nob_roles)}): {nob_roles} | grade='{nob_grade}'")
+            log.info(f"[MEDAL-SYNC] '{roblox_username}' nobility from sheet: {nob_roles} grade='{nob_grade}'")
             nob_lines = [await assign_role(rn, "Nobility") for rn in sorted(nob_roles)]
 
-            if nob_prefix:
+            if nob_grade:
+                new_nick = format_nobility_nick(nob_grade, roblox_username)
                 current_nick = member.nick or member.display_name
-                if not current_nick.startswith(nob_prefix):
-                    base = current_nick
-                    for _g, (_r, pfx) in NOBILITY_ROLE_MAP.items():
-                        if base.startswith(pfx + " "):
-                            base = base[len(pfx) + 1:]
-                            break
-                    new_nick = f"{nob_prefix} {base}"[:32]
+                if current_nick != new_nick:
                     try:
-                        await member.edit(nick=new_nick, reason="Medal sync: nobility prefix applied")
+                        await member.edit(nick=new_nick, reason="Medal sync: nobility title applied")
                         nob_lines.append(f"✅ Nickname updated → **{new_nick}**")
                         print(f"[MEDAL-SYNC]   NICK UPDATED: '{current_nick}' → '{new_nick}' for {roblox_username}")
                         log.info(f"[MEDAL-SYNC] Nick '{current_nick}' → '{new_nick}' for '{roblox_username}'")
@@ -2047,7 +2065,7 @@ async def medal_sync(interaction: discord.Interaction, users: str):
                         nob_lines.append("⚠️ Could not update nickname (bot role too low or server owner).")
                         log.warning(f"[MEDAL-SYNC] Cannot update nick for '{roblox_username}' (Forbidden)")
                 else:
-                    nob_lines.append(f"✅ Nickname prefix **{nob_prefix}** already applied.")
+                    nob_lines.append(f"✅ Nickname already correct: **{new_nick}**")
 
             embed.add_field(
                 name=f"👑 Nobility ({len(nob_roles)} approved)",
@@ -2263,9 +2281,12 @@ async def promote(interaction: discord.Interaction, members: str):
                 errors.append("missing permissions for brigade roles")
                 status_lines.append("❌ Missing permissions to modify brigade roles.")
 
-            old_regiments      = [r for r in member.roles if r.name in ALL_REGIMENT_ROLES]
             new_regiment_roles = [discord.utils.get(guild.roles, name=rn) for rn in regiment_names]
             new_regiment_roles = [r for r in new_regiment_roles if r is not None]
+            new_regiment_role_names = {r.name for r in new_regiment_roles}
+            # Strip all regiment roles except the one we're about to assign
+            old_regiments = [r for r in member.roles
+                             if r.name in ALL_REGIMENT_ROLES and r.name not in new_regiment_role_names]
             try:
                 if old_regiments:      await member.remove_roles(*old_regiments, reason="Draft: regiment swap")
                 if new_regiment_roles:
@@ -2274,6 +2295,24 @@ async def promote(interaction: discord.Interaction, members: str):
             except discord.Forbidden:
                 errors.append("missing permissions for regiment roles")
                 status_lines.append("❌ Missing permissions to modify regiment roles.")
+
+            # ── Update nickname regiment tag ─────────────────────────────────
+            # Replace the old [tab] prefix in the nickname with the new one.
+            # Preserve any nobility title formatting if present.
+            if username:
+                current_nick = member.nick or member.display_name
+                # Strip any existing [tag] prefix, e.g. "[26e] ", "[7e] ", "[GaC] "
+                import re as _re
+                base_nick = _re.sub(r"^\[[^\]]+\]\s*", "", current_nick)
+                new_nick = f"[{target_tab}] {base_nick}"[:32]
+                try:
+                    await member.edit(nick=new_nick, reason=f"Draft: regiment tag → [{target_tab}]")
+                    status_lines.append(f"✅ Nickname → **{new_nick}**")
+                    print(f"[PROMOTE/DRAFT] Nick updated: '{current_nick}' → '{new_nick}' for {username}")
+                except discord.Forbidden:
+                    status_lines.append("⚠️ Cannot update nickname (bot role too low or server owner).")
+                except discord.HTTPException as _he:
+                    status_lines.append(f"⚠️ Nickname update failed: {_he.text}")
 
             # ── Sync draft to CAV roster spreadsheet ────────────────────────
             # Moves the member's old regiment row to the target regiment tab
