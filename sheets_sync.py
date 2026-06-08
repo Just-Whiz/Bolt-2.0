@@ -43,7 +43,7 @@ log = logging.getLogger(__name__)
 # ── Constants ──────────────────────────────────────────────────────────────────
 
 SPREADSHEET_ID = os.getenv("CAV_SPREADSHEET_ID", "1pPs_Kmcfzz2yu5JUrqCGdrEpVdmXMOLMwHfGGdmGxwY")
-SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json")
+SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "credentials.json")
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
