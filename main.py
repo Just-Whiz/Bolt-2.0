@@ -2365,7 +2365,7 @@ async def promote(interaction: discord.Interaction, members: str):
                         target_tab=target_tab,
                     )
                     print(f"[PROMOTE/DRAFT] ✅ Sheet sync complete for {username or member} → {target_tab}")
-                    status_lines.append(f"✅ Roster moved to **{target_tab}** tab (rank set to Draftee).")
+                    status_lines.append(f"✅ Roster moved to **{target_tab}** tab (rank reset to Cavalier).")
                 except Exception as _se:
                     print(f"[PROMOTE/DRAFT] ⚠️ Sheet sync failed for {username or member}: {_se}")
                     log.error(f"[PROMOTE/DRAFT] Sheet sync failed for {username or member}: {_se}")

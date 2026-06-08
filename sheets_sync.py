@@ -5,16 +5,16 @@ Handles /induct, /promote, /purge roster sync against the master workbook.
 Sheet structure (all regiment tabs: GaC, 5e, 7e, 26e, CaC):
   - Data rows start at 1-indexed row 24 (FIRST_RANKER_ROW), i.e. 0-indexed row 23.
   - Col layout (0-indexed):
-      4  = Rank/Position
-      5  = Timezone
-      6  = Drafted date (MM/DD/YYYY)
-      7  = Days Since
-      8  = Discord ID
-      9  = Name (Roblox username)
-      10 = K (kills)
-      11 = KPE
-      12 = Activity %
-      13+= Rally attendance columns
+      5  = Rank/Position
+      6  = Timezone
+      7  = Drafted date (MM/DD/YYYY)
+      8  = Days Since
+      9  = Discord ID
+      10 = Name (Roblox username)
+      11 = K (kills)
+      12 = KPE
+      13 = Activity %
+      14+= Rally attendance columns
 
 Stats tab member map (far-right columns, 0-indexed):
       40 = Discord ID
@@ -62,6 +62,14 @@ REGIMENT_TO_TAB = {
 # Inverse map: tab name → full regiment name
 TAB_TO_REGIMENT = {v: k for k, v in REGIMENT_TO_TAB.items()}
 
+# Maps brigade name (Roblox rank) → list of regiment tab names a draftee may go to.
+# Used by sync_promote_draft to move a member between regiment tabs.
+BRIGADE_TO_TABS: dict[str, list[str]] = {
+    "BRIGADE KELLERMANN": ["26e"],
+    "BRIGADE LASALLE":    ["5e"],
+    "BRIGADE BESSIÈRES":  ["GaC", "CaC"],
+}
+
 # Rank display name → internal short label used in the sheet
 # (sheets use these verbatim; keep in sync with your Roblox group ranks)
 RANK_LABELS = {
@@ -85,15 +93,15 @@ RANK_LABELS = {
 }
 
 # Column indices (0-based) within a regiment tab
-COL_RANK       = 4
-COL_TIMEZONE   = 5
-COL_DRAFTED    = 6
-COL_DAYS_SINCE = 7
-COL_DISCORD_ID = 8
-COL_USERNAME   = 9
-COL_KILLS      = 10
-COL_KPE        = 11
-COL_ACTIVITY   = 12
+COL_RANK       = 5
+COL_TIMEZONE   = 6
+COL_DRAFTED    = 7
+COL_DAYS_SINCE = 8
+COL_DISCORD_ID = 9
+COL_USERNAME   = 10
+COL_KILLS      = 11
+COL_KPE        = 12
+COL_ACTIVITY   = 13
 
 FIRST_RANKER_ROW_1IDX = 24   # 1-indexed row where member data begins
 
@@ -264,16 +272,14 @@ def sync_induct(
 def sync_promote(
     discord_id: str,
     new_rank_label: str,
-    roblox_username: Optional[str] = None,
+    roblox_username=None,
 ) -> bool:
     """
-    Update the Rank/Position cell for a member across all regiment tabs.
-    Looks them up by Discord ID in the Stats map first to find the right tab,
-    then updates that tab's rank cell.
+    Update the Rank/Position cell for a member in their current regiment tab.
+    Looks them up by Discord ID in the Stats map first to find the right tab.
 
     Returns True on success, False if member not found.
     """
-    # Find which regiment they're in
     stats_result = _find_member_in_stats(discord_id)
     if not stats_result:
         log.warning(f"[sheets_sync] promote: discord_id {discord_id} not found in Stats map")
@@ -291,16 +297,112 @@ def sync_promote(
         log.warning(f"[sheets_sync] promote: {discord_id} not found in tab {tab_name}")
         return False
 
-    # Update rank cell: col COL_RANK (0-indexed) → gspread col COL_RANK+1
     rank_col_letter = _col_letter(COL_RANK + 1)
     cell_ref = f"{rank_col_letter}{member_row}"
     ws.update(cell_ref, [[new_rank_label]], value_input_option="USER_ENTERED")
 
     log.info(
         f"[sheets_sync] Promoted discord_id={discord_id} ({sheet_username}) "
-        f"in {tab_name} row {member_row} → {new_rank_label!r}"
+        f"in {tab_name} row {member_row} to {new_rank_label!r}"
     )
     return True
+
+
+def sync_promote_draft(
+    discord_id: str,
+    roblox_username: str,
+    target_brigade: str,
+    target_tab: str,
+) -> bool:
+    """
+    Handle a draft/brigade transfer in the spreadsheet:
+      1. Delete the member's old row in their current regiment tab.
+      2. Update their Stats map entry with the new regiment.
+      3. Insert a fresh Draftee row in the target regiment tab,
+         preserving the member's original drafted date if available.
+
+    Returns True on success.
+    """
+    old_drafted_date = _today_str()
+
+    stats_result = _find_member_in_stats(discord_id)
+    if stats_result:
+        stats_row_1idx, old_regiment_full_name, sheet_username = stats_result
+        old_tab = REGIMENT_TO_TAB.get(old_regiment_full_name)
+
+        if old_tab:
+            old_ws = _worksheet(old_tab)
+            old_member_row = _find_member_row_in_tab(old_ws, discord_id)
+            if old_member_row is not None:
+                old_row_data = old_ws.row_values(old_member_row)
+                if len(old_row_data) > COL_DRAFTED and old_row_data[COL_DRAFTED].strip():
+                    old_drafted_date = old_row_data[COL_DRAFTED].strip()
+                old_ws.delete_rows(old_member_row)
+                log.info(f"[sheets_sync] draft_transfer: deleted {discord_id} from {old_tab} row {old_member_row}")
+            else:
+                log.warning(f"[sheets_sync] draft_transfer: {discord_id} not found in old tab {old_tab}")
+        else:
+            log.warning(f"[sheets_sync] draft_transfer: unknown old regiment {old_regiment_full_name!r}")
+
+        new_regiment_full_name = TAB_TO_REGIMENT.get(target_tab, target_brigade)
+        stats_ws = _worksheet("Stats")
+        stats_ws.update(
+            f"AO{stats_row_1idx}:AQ{stats_row_1idx}",
+            [[discord_id, new_regiment_full_name, roblox_username]],
+            value_input_option="USER_ENTERED",
+        )
+        log.info(f"[sheets_sync] draft_transfer: Stats map row {stats_row_1idx} updated to regiment={new_regiment_full_name!r}")
+    else:
+        log.warning(f"[sheets_sync] draft_transfer: {discord_id} not in Stats map; creating new Stats entry")
+        new_regiment_full_name = TAB_TO_REGIMENT.get(target_tab, target_brigade)
+        stats_ws = _worksheet("Stats")
+        stats_all = stats_ws.get_all_values()
+        last_stats_row = 0
+        for i, row in enumerate(stats_all):
+            if len(row) > STATS_COL_DISCORD_ID and str(row[STATS_COL_DISCORD_ID]).strip():
+                last_stats_row = i + 1
+        new_stats_row = last_stats_row + 1
+        stats_ws.update(
+            f"AO{new_stats_row}:AQ{new_stats_row}",
+            [[discord_id, new_regiment_full_name, roblox_username]],
+            value_input_option="USER_ENTERED",
+        )
+
+    # Insert new Draftee row in target regiment tab
+    target_ws = _worksheet(target_tab)
+    all_values = target_ws.get_all_values()
+
+    last_data_row_1idx = FIRST_RANKER_ROW_1IDX - 1
+    for i, row in enumerate(all_values):
+        row_1idx = i + 1
+        if row_1idx < FIRST_RANKER_ROW_1IDX:
+            continue
+        if len(row) > COL_DISCORD_ID and str(row[COL_DISCORD_ID]).strip():
+            last_data_row_1idx = row_1idx
+
+    new_row_1idx = last_data_row_1idx + 1
+    header_row = all_values[FIRST_RANKER_ROW_1IDX - 2] if len(all_values) >= FIRST_RANKER_ROW_1IDX else []
+    row_width = max(COL_ACTIVITY + 1, len(header_row))
+
+    days = _days_since(old_drafted_date)
+    new_row = [""] * row_width
+    new_row[COL_RANK]       = "Cavalier"
+    new_row[COL_TIMEZONE]   = ""
+    new_row[COL_DRAFTED]    = old_drafted_date
+    new_row[COL_DAYS_SINCE] = days
+    new_row[COL_DISCORD_ID] = discord_id
+    new_row[COL_USERNAME]   = roblox_username
+    new_row[COL_KILLS]      = "0"
+    new_row[COL_KPE]        = "0.0"
+    new_row[COL_ACTIVITY]   = "0%"
+
+    target_ws.insert_row(new_row, new_row_1idx, value_input_option="USER_ENTERED")
+    log.info(
+        f"[sheets_sync] draft_transfer: inserted {roblox_username} ({discord_id}) "
+        f"into {target_tab} at row {new_row_1idx} with rank=Draftee"
+    )
+    return True
+
 
 
 def sync_purge(
@@ -404,6 +506,20 @@ async def async_sync_purge(
         None,
         sync_purge,
         discord_id, roblox_username, roblox_id, display_name, blacklist,
+    )
+
+
+async def async_sync_promote_draft(
+    discord_id: str,
+    roblox_username: str,
+    target_brigade: str,
+    target_tab: str,
+) -> bool:
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None,
+        sync_promote_draft,
+        discord_id, roblox_username, target_brigade, target_tab,
     )
 
 
