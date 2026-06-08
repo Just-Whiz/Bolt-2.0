@@ -21,7 +21,9 @@ from dotenv import load_dotenv
 from sheets_sync import (
     async_sync_induct,
     async_sync_promote,
+    async_sync_promote_draft,
     async_sync_purge,
+    BRIGADE_TO_TABS,
 )
 
 load_dotenv()
@@ -223,6 +225,15 @@ BRIGADE_REGIMENTS: dict[str, list[str]] = {
 
 ALL_BRIGADE_ROLES:  set[str] = set(BRIGADES)
 ALL_REGIMENT_ROLES: set[str] = {r for regs in BRIGADE_REGIMENTS.values() for r in regs}
+
+# Human-readable labels for regiment tab names (used in draft regiment dropdown)
+REGIMENT_TO_TAB_LABEL: dict[str, str] = {
+    "GaC": "Grenadiers-à-Cheval de la Garde",
+    "CaC": "Chasseurs-à-Cheval de la Garde",
+    "5e":  "5e Chevaux Légers Lanciers",
+    "7e":  "7e Cuirassiers",
+    "26e": "26e Chasseurs a Cheval de Ligne",
+}
 
 # ============================================================
 #  RANK CONFIGURATION
@@ -887,7 +898,8 @@ async def resolve_roblox_user(discord_id: str) -> dict | None:
                     return None
                 body      = await r.json()
                 roblox_id = str(body.get("robloxID") or body.get("roblox_id", ""))
-                if not roblox_id:
+                # Bloxlink returns robloxID=0 (or syncError:0 message:"") for unverified users
+                if not roblox_id or roblox_id == "0":
                     return None
     except Exception as e:
         print(f"[BLOXLINK] Exception: {e}")
@@ -2172,12 +2184,30 @@ class BrigadeSelect(discord.ui.Select):
         await interaction.response.defer()
         self.view.stop()
 
+class RegimentSelect(discord.ui.Select):
+    """Regiment selector shown when a brigade has multiple regiment tabs."""
+    def __init__(self, tab_choices: list[str]):
+        # Map tab name -> human-readable label using TAB_TO_REGIMENT
+        options = [
+            discord.SelectOption(
+                label=REGIMENT_TO_TAB_LABEL.get(tab, tab),
+                value=tab,
+            )
+            for tab in tab_choices
+        ]
+        super().__init__(placeholder="Select regiment…", min_values=1, max_values=1, options=options)
+    async def callback(self, interaction: discord.Interaction):
+        self.view.target_tab = self.values[0]
+        await interaction.response.defer()
+        self.view.stop()
+
 class SingleSelectView(discord.ui.View):
     def __init__(self, select: discord.ui.Select, timeout: int = 60):
         super().__init__(timeout=timeout)
         self.promo_type: str | None = None
         self.target_rank: str | None = None
         self.target_brigade: str | None = None
+        self.target_tab: str | None = None
         self.add_item(select)
 
 # ============================================================
@@ -2234,6 +2264,22 @@ async def promote(interaction: discord.Interaction, members: str):
 
         target_brigade = brigade_view.target_brigade
         regiment_names = BRIGADE_REGIMENTS[target_brigade]
+
+        # Step 3: if this brigade has multiple regiment tabs, ask which one
+        available_tabs = BRIGADE_TO_TABS.get(target_brigade, [])
+        if len(available_tabs) > 1:
+            reg_view = SingleSelectView(RegimentSelect(available_tabs))
+            await interaction.edit_original_response(
+                content="**Step 3:** Select the specific regiment for this draftee:", view=reg_view
+            )
+            await reg_view.wait()
+            if reg_view.target_tab is None:
+                await interaction.edit_original_response(content="⏱️ Timed out.", view=None)
+                return
+            target_tab = reg_view.target_tab
+        else:
+            target_tab = available_tabs[0] if available_tabs else None
+
         await interaction.edit_original_response(content="⏳ Processing draft…", view=None)
 
         async def draft_one(member: discord.Member) -> discord.Embed:
@@ -2308,18 +2354,25 @@ async def promote(interaction: discord.Interaction, members: str):
                 status_lines.append("❌ Missing permissions to modify regiment roles.")
 
             # ── Sync draft to CAV roster spreadsheet ────────────────────────
-            # On a draft, the Roblox rank name is the brigade name (e.g. "BRIGADE KELLERMANN").
-            # We record that as the sheet rank label since it reflects their Roblox position.
-            try:
-                await async_sync_promote(
-                    discord_id=str(member.id),
-                    new_rank_label=target_brigade,
-                    roblox_username=username,
-                )
-                print(f"[PROMOTE/DRAFT] ✅ Sheet sync complete for {username or member}")
-            except Exception as _se:
-                print(f"[PROMOTE/DRAFT] ⚠️ Sheet sync failed for {username or member}: {_se}")
-                log.error(f"[PROMOTE/DRAFT] Sheet sync failed for {username or member}: {_se}")
+            # Moves the member's old regiment row to the target regiment tab
+            # and updates the Stats map, preserving their original drafted date.
+            if target_tab:
+                try:
+                    await async_sync_promote_draft(
+                        discord_id=str(member.id),
+                        roblox_username=username or str(member.id),
+                        target_brigade=target_brigade,
+                        target_tab=target_tab,
+                    )
+                    print(f"[PROMOTE/DRAFT] ✅ Sheet sync complete for {username or member} → {target_tab}")
+                    status_lines.append(f"✅ Roster moved to **{target_tab}** tab (rank set to Draftee).")
+                except Exception as _se:
+                    print(f"[PROMOTE/DRAFT] ⚠️ Sheet sync failed for {username or member}: {_se}")
+                    log.error(f"[PROMOTE/DRAFT] Sheet sync failed for {username or member}: {_se}")
+                    status_lines.append("⚠️ Roster sheet sync failed — update manually.")
+            else:
+                print(f"[PROMOTE/DRAFT] ⚠️ No target_tab resolved for {target_brigade} — skipping sheet sync")
+                status_lines.append("⚠️ No regiment tab resolved — update roster manually.")
 
             color = discord.Color.orange() if errors else discord.Color.dark_blue()
             embed = discord.Embed(title="Draft Results", color=color)
@@ -2332,10 +2385,11 @@ async def promote(interaction: discord.Interaction, members: str):
             embed.add_field(name="Discord", value=f"<@{member.id}>", inline=True)
             embed.add_field(name="Roblox",  value=username, inline=True)
             embed.add_field(name="Actions", value="\n".join(status_lines), inline=False)
-            embed.set_footer(text=f"Drafted by {interaction.user} • Roblox ID: {roblox_id}")
+            tab_label = REGIMENT_TO_TAB_LABEL.get(target_tab or "", target_tab or target_brigade)
+            embed.set_footer(text=f"Drafted by {interaction.user} • {tab_label} • Roblox ID: {roblox_id}")
             if not errors:
-                log.info(f"[PROMOTE/DRAFT] {username} drafted → {target_brigade} by {interaction.user}")
-                print(f"[PROMOTE/DRAFT] ✅ {username} drafted → {target_brigade}")
+                log.info(f"[PROMOTE/DRAFT] {username} drafted → {target_brigade}/{target_tab} by {interaction.user}")
+                print(f"[PROMOTE/DRAFT] ✅ {username} drafted → {target_brigade}/{target_tab}")
             else:
                 print(f"[PROMOTE/DRAFT] ⚠️ {username} drafted with errors: {errors}")
             return embed
