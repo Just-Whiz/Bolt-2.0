@@ -41,7 +41,7 @@ CAV_GROUP_ID = os.getenv("CAV_GROUP_ID", "195387641")
 GOOGLE_SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "credentials.json")
 
 FRENCH_SPREADSHEET_ID = os.getenv("FRENCH_SPREADSHEET_ID")
-CAV_SPREADSHEET_ID = os.getenv("CAV_SPREADSHEET_ID")
+CAV_SPREADSHEET_ID = os.getenv("CAV_SPREADSHEET_ID, 1m4IWGs9mwK4arKFKCfwpY1K6kmth7YouLRQFz_5u15Q")
 
 def _oc_headers() -> dict:
     return {"x-api-key": ROBLOX_OPEN_CLOUD, "Content-Type": "application/json"}
