@@ -42,7 +42,7 @@ log = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
-SPREADSHEET_ID = os.getenv("CAV_SPREADSHEET_ID", "1pPs_Kmcfzz2yu5JUrqCGdrEpVdmXMOLMwHfGGdmGxwY")
+SPREADSHEET_ID       = os.getenv("CAV_SPREADSHEET_ID", "1pPs_Kmcfzz2yu5JUrqCGdrEpVdmXMOLMwHfGGdmGxwY")
 SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "credentials.json")
 
 SCOPES = [
@@ -134,44 +134,97 @@ def _worksheet(tab_name: str) -> gspread.Worksheet:
     return _get_spreadsheet().worksheet(tab_name)
 
 
-# ── Internal helpers ───────────────────────────────────────────────────────────
+# ── Bulk data loader ───────────────────────────────────────────────────────────
 
-def _find_member_row_in_tab(ws: gspread.Worksheet, discord_id: str) -> Optional[int]:
+def _load_all_data(tabs: list[str]) -> dict[str, list[list[str]]]:
     """
-    Return the 1-indexed row number of the member in this regiment tab,
-    or None if not found. Searches the Discord ID column (COL_DISCORD_ID).
+    Fetch get_all_values() for each requested tab in one pass.
+    Returns {tab_name: all_values_list}.
+
+    All per-operation helpers work against this in-memory snapshot instead of
+    issuing individual col_values() / row_values() API calls, which is the
+    main source of 429s when multiple users trigger commands simultaneously.
+    """
+    ss = _get_spreadsheet()
+    result: dict[str, list[list[str]]] = {}
+    for name in tabs:
+        try:
+            result[name] = ss.worksheet(name).get_all_values()
+        except Exception as e:
+            log.error(f"[sheets_sync] _load_all_data: failed to load tab {name!r}: {e}")
+            result[name] = []
+    return result
+
+
+# ── In-memory search helpers (operate on pre-fetched data) ────────────────────
+
+def _find_member_row_in_data(
+    tab_data: list[list[str]],
+    discord_id: str,
+) -> Optional[int]:
+    """
+    Return the 1-indexed row of the member in a pre-fetched tab's data,
+    or None if not found. Only searches rows >= FIRST_RANKER_ROW_1IDX.
     """
     discord_id_str = str(discord_id)
-    col_values = ws.col_values(COL_DISCORD_ID + 1)  # gspread is 1-indexed
-    for row_1idx, cell_val in enumerate(col_values, start=1):
-        if str(cell_val).strip() == discord_id_str and row_1idx >= FIRST_RANKER_ROW_1IDX:
+    for i, row in enumerate(tab_data):
+        row_1idx = i + 1
+        if row_1idx < FIRST_RANKER_ROW_1IDX:
+            continue
+        if len(row) > COL_DISCORD_ID and str(row[COL_DISCORD_ID]).strip() == discord_id_str:
             return row_1idx
     return None
 
 
-def _find_member_in_stats(discord_id: str) -> Optional[tuple[int, str, str]]:
+def _find_member_in_stats_data(
+    stats_data: list[list[str]],
+    discord_id: str,
+) -> Optional[tuple[int, str, str]]:
     """
-    Search the Stats tab for a Discord ID.
-    Returns (row_1idx, regiment_name, roblox_username) or None.
-
-    Returns the LAST match so that re-inducted members (who may have a stale
-    old entry earlier in the map) always resolve to their most recent entry.
+    Search pre-fetched Stats tab data for a Discord ID.
+    Returns (row_1idx, regiment_name, roblox_username) for the LAST match,
+    so that re-inducted members always resolve to their most recent entry.
     """
-    ws = _worksheet("Stats")
-    col_values = ws.col_values(STATS_COL_DISCORD_ID + 1)
     discord_id_str = str(discord_id)
     last_match: Optional[tuple[int, str, str]] = None
-    for row_1idx, cell_val in enumerate(col_values, start=1):
-        if str(cell_val).strip() == discord_id_str:
-            row_data = ws.row_values(row_1idx)
-            regiment = row_data[STATS_COL_REGIMENT] if len(row_data) > STATS_COL_REGIMENT else ""
-            username = row_data[STATS_COL_USERNAME]  if len(row_data) > STATS_COL_USERNAME  else ""
+    for i, row in enumerate(stats_data):
+        row_1idx = i + 1
+        if len(row) > STATS_COL_DISCORD_ID and str(row[STATS_COL_DISCORD_ID]).strip() == discord_id_str:
+            regiment = row[STATS_COL_REGIMENT] if len(row) > STATS_COL_REGIMENT else ""
+            username  = row[STATS_COL_USERNAME]  if len(row) > STATS_COL_USERNAME  else ""
             last_match = (row_1idx, regiment, username)
     return last_match
 
 
+def _find_last_data_row_in_data(tab_data: list[list[str]]) -> int:
+    """
+    Return the 1-indexed row of the last member row in a pre-fetched tab,
+    or FIRST_RANKER_ROW_1IDX - 1 if the tab has no data rows yet.
+    """
+    last = FIRST_RANKER_ROW_1IDX - 1
+    for i, row in enumerate(tab_data):
+        row_1idx = i + 1
+        if row_1idx >= FIRST_RANKER_ROW_1IDX and len(row) > COL_DISCORD_ID and str(row[COL_DISCORD_ID]).strip():
+            last = row_1idx
+    return last
+
+
+def _find_last_stats_row_in_data(stats_data: list[list[str]]) -> int:
+    """
+    Return the 1-indexed row of the last occupied Stats map entry,
+    or 0 if the map is empty.
+    """
+    return max(
+        (i + 1 for i, row in enumerate(stats_data)
+         if len(row) > STATS_COL_DISCORD_ID and str(row[STATS_COL_DISCORD_ID]).strip()),
+        default=0,
+    )
+
+
+# ── Misc helpers ───────────────────────────────────────────────────────────────
+
 def _today_str() -> str:
-    """Return today's date as MM/DD/YYYY — matches _days_since's strptime format."""
+    """Return today's date as MM/DD/YYYY."""
     return datetime.now(timezone.utc).strftime("%m/%d/%Y")
 
 
@@ -194,19 +247,7 @@ def _col_letter(col_1idx: int) -> str:
     return result
 
 
-def _find_last_data_row(ws: gspread.Worksheet) -> int:
-    """
-    Return the 1-indexed row of the last member row in a regiment tab,
-    or FIRST_RANKER_ROW_1IDX - 1 if the tab has no data rows yet.
-    """
-    all_values = ws.get_all_values()
-    last = FIRST_RANKER_ROW_1IDX - 1
-    for i, row in enumerate(all_values):
-        row_1idx = i + 1
-        if row_1idx >= FIRST_RANKER_ROW_1IDX and len(row) > COL_DISCORD_ID and str(row[COL_DISCORD_ID]).strip():
-            last = row_1idx
-    return last
-
+# ── Row insertion (formula-copying) ───────────────────────────────────────────
 
 def _insert_row_with_formulas(
     ws: gspread.Worksheet,
@@ -219,41 +260,29 @@ def _insert_row_with_formulas(
 ) -> None:
     """
     Insert a new member row at new_row_1idx, copying all cell formulas from the
-    row directly above it (new_row_1idx - 1) so that formula-driven columns
-    (Days Since, KPE, Activity %, rally attendance, etc.) auto-calculate
-    correctly for the new row rather than receiving hard-coded static values.
+    row directly above it so that formula-driven columns (Days Since, KPE,
+    Activity %, rally attendance, etc.) auto-calculate correctly.
 
     Strategy
     --------
     1. Read the raw (formula) content of the template row via the Sheets v4
-       `spreadsheets.values.get` call with `valueRenderOption=FORMULA`.
-    2. Use gspread's `insert_rows` to push a blank row at the target position,
-       which shifts every row below it down by one (preserving existing data).
-    3. Write the merged row data back: copied formulas for "computed" columns,
+       spreadsheets.values.get call with valueRenderOption=FORMULA.
+    2. Use gspread's insert_rows to push a blank row at the target position,
+       shifting every row below it down by one.
+    3. Write the merged row back: copied formulas for computed columns,
        actual values for the identity columns (rank, timezone, date, Discord ID,
-       Roblox username).  We always write with `value_input_option=USER_ENTERED`
-       so that formula strings starting with `=` are interpreted as formulas.
-
-    The "identity" columns we always overwrite with real values are:
-        COL_RANK, COL_TIMEZONE, COL_DRAFTED, COL_DISCORD_ID, COL_USERNAME
-    Every other column gets its formula from the template row, with the
-    template row's own row number replaced by new_row_1idx so relative
-    references stay correct.
+       Roblox username). Always writes with value_input_option=USER_ENTERED so
+       that formula strings starting with = are interpreted as formulas.
     """
-    spreadsheet = _get_spreadsheet()
-    sheet_id = ws.id
-
-    template_row_1idx = new_row_1idx - 1
-
-    # ── Step 1: read template row formulas via raw Sheets API ─────────────────
-    # gspread's .row_values() returns displayed values; we need raw formulas.
-    # Access the underlying google-auth credentials from the gspread client.
     import googleapiclient.discovery  # type: ignore
 
-    creds = _get_client().http_client.auth  # google.oauth2.service_account.Credentials
+    spreadsheet = _get_spreadsheet()
+    template_row_1idx = new_row_1idx - 1
+
+    creds   = _get_client().http_client.auth
     service = googleapiclient.discovery.build("sheets", "v4", credentials=creds, cache_discovery=False)
 
-    tab_title = ws.title
+    tab_title      = ws.title
     range_notation = f"'{tab_title}'!{template_row_1idx}:{template_row_1idx}"
 
     result = (
@@ -268,17 +297,14 @@ def _insert_row_with_formulas(
     )
     template_values = result.get("values", [[]])[0] if result.get("values") else []
 
-    # ── Step 2: insert a blank row at new_row_1idx (shifts everything below) ──
+    # Insert a blank row — shifts everything below down by one
     ws.insert_rows([[]], row=new_row_1idx)
 
-    # ── Step 3: build the merged row ──────────────────────────────────────────
-    # Extend template to cover at least up to COL_ACTIVITY so we always have
-    # enough cells; gaps are filled with "".
-    row_width = max(len(template_values), COL_ACTIVITY + 1)
+    # Build the merged row: start from the template, update row-number references,
+    # then overwrite identity columns with real values.
+    row_width    = max(len(template_values), COL_ACTIVITY + 1)
     new_row_data = list(template_values) + [""] * (row_width - len(template_values))
 
-    # For formula cells that reference a specific row number, replace the
-    # template row number with the new row number so relative refs stay correct.
     template_row_str = str(template_row_1idx)
     new_row_str      = str(new_row_1idx)
     updated_row = []
@@ -287,18 +313,15 @@ def _insert_row_with_formulas(
             cell = cell.replace(template_row_str, new_row_str)
         updated_row.append(cell)
 
-    # Overwrite the identity columns with the real inductee values.
-    # We always reset these regardless of what the template contained.
     updated_row[COL_RANK]       = rank_label
     updated_row[COL_TIMEZONE]   = timezone_str
     updated_row[COL_DRAFTED]    = drafted_date
-    updated_row[COL_DAYS_SINCE] = f"=DATEDIF(H{new_row_1idx},TODAY(),\"D\")&\" days\""
+    updated_row[COL_DAYS_SINCE] = f'=DATEDIF(H{new_row_1idx},TODAY(),"D")&" days"'
     updated_row[COL_DISCORD_ID] = discord_id
     updated_row[COL_USERNAME]   = roblox_username
 
-    # ── Step 4: write the merged row back ─────────────────────────────────────
-    start_col = _col_letter(1)
-    end_col   = _col_letter(row_width)
+    start_col  = _col_letter(1)
+    end_col    = _col_letter(row_width)
     cell_range = f"'{tab_title}'!{start_col}{new_row_1idx}:{end_col}{new_row_1idx}"
 
     (
@@ -331,90 +354,95 @@ def sync_induct(
     """
     Induct (or re-induct) a member.
 
-    * Always targets the 26e tab and always sets rank to Cavalier — regardless
-      of what regiment_full_name / rank_label are passed in and regardless of
-      where the member currently sits on the spreadsheet.
+    * Always targets the 26e tab at Cavalier rank — regardless of what
+      regiment_full_name / rank_label are passed in.
     * If the member already exists anywhere on the sheet their row is deleted
       and a fresh row is appended to the 26e tab (rank reset to Cavalier).
     * New rows copy cell formulas from the row above so that formula-driven
-      columns (Days Since, KPE, Activity %, rally columns, etc.) work correctly.
+      columns work correctly.
+
+    API calls: 1 get_all_values per regiment tab + Stats (loaded once up front),
+    then targeted writes only. No per-column reads.
     """
-    discord_id_str = str(discord_id)
-
-    # Always 26e / Cavalier — ignore whatever the caller passed
-    target_tab_name    = INDUCT_TAB          # "26e"
-    effective_rank     = INDUCT_RANK_LABEL   # "Cavalier"
+    discord_id_str     = str(discord_id)
+    target_tab_name    = INDUCT_TAB           # "26e"
+    effective_rank     = INDUCT_RANK_LABEL    # "Cavalier"
     effective_regiment = INDUCT_REGIMENT_FULL
+    today              = _today_str()
 
-    today = _today_str()
+    # ── Load all regiment tabs + Stats in one pass ────────────────────────────
+    all_tabs   = list(REGIMENT_TO_TAB.values()) + ["Stats"]
+    tab_data   = _load_all_data(all_tabs)
+    stats_data = tab_data["Stats"]
 
-    # 1. Scan ALL regiment tabs for any existing record of this user
-    existing_locations: list[tuple[str, gspread.Worksheet, list[int]]] = []
+    # ── Find all existing rows for this member across regiment tabs ───────────
+    existing_locations: list[tuple[str, list[int]]] = []
     for t_name in REGIMENT_TO_TAB.values():
-        try:
-            ws = _worksheet(t_name)
-            col_vals = ws.col_values(COL_DISCORD_ID + 1)
-            rows = [
-                i + 1 for i, cell in enumerate(col_vals)
-                if str(cell).strip() == discord_id_str and i + 1 >= FIRST_RANKER_ROW_1IDX
-            ]
-            if rows:
-                existing_locations.append((t_name, ws, rows))
-        except Exception as e:
-            log.error(f"[sheets_sync] Error reading tab {t_name} for duplicates: {e}")
+        data = tab_data[t_name]
+        rows = [
+            i + 1 for i, row in enumerate(data)
+            if i + 1 >= FIRST_RANKER_ROW_1IDX
+            and len(row) > COL_DISCORD_ID
+            and str(row[COL_DISCORD_ID]).strip() == discord_id_str
+        ]
+        if rows:
+            existing_locations.append((t_name, rows))
 
-    stats_ws = _worksheet("Stats")
-    stats_col_values = stats_ws.col_values(STATS_COL_DISCORD_ID + 1)
     stats_rows = [
-        idx + 1 for idx, cell in enumerate(stats_col_values)
-        if str(cell).strip() == discord_id_str
+        i + 1 for i, row in enumerate(stats_data)
+        if len(row) > STATS_COL_DISCORD_ID
+        and str(row[STATS_COL_DISCORD_ID]).strip() == discord_id_str
     ]
 
     rows_deleted = 0
 
-    # ── Delete ALL existing rows across all tabs (re-induction always starts fresh) ──
-    if existing_locations:
-        for t_name, ws, rows in existing_locations:
-            for r in reversed(rows):
-                ws.delete_rows(r)
-                rows_deleted += 1
+    # ── Delete all existing regiment rows (re-induction starts fresh) ─────────
+    for t_name, rows in existing_locations:
+        ws = _worksheet(t_name)
+        for r in reversed(rows):
+            ws.delete_rows(r)
+            rows_deleted += 1
+    if rows_deleted:
         log.info(
             f"[sheets_sync] Re-induction: cleared {rows_deleted} existing row(s) "
             f"for {roblox_username} across all tabs"
         )
 
-    # ── Append a brand-new row to the 26e tab ─────────────────────────────────
+    # ── Append a fresh row to the 26e tab ─────────────────────────────────────
+    # Re-fetch 26e data only if we just deleted from it (row indices shifted).
+    if any(t == target_tab_name for t, _ in existing_locations):
+        tab_data[target_tab_name] = _worksheet(target_tab_name).get_all_values()
+
     target_ws    = _worksheet(target_tab_name)
-    last_row     = _find_last_data_row(target_ws)
+    last_row     = _find_last_data_row_in_data(tab_data[target_tab_name])
     new_row_1idx = last_row + 1
 
     if last_row >= FIRST_RANKER_ROW_1IDX:
-        # There is at least one existing data row — copy formulas from it.
         _insert_row_with_formulas(
-            ws            = target_ws,
-            new_row_1idx  = new_row_1idx,
-            rank_label    = effective_rank,
-            timezone_str  = timezone_str,
-            drafted_date  = today,
-            discord_id    = discord_id_str,
+            ws              = target_ws,
+            new_row_1idx    = new_row_1idx,
+            rank_label      = effective_rank,
+            timezone_str    = timezone_str,
+            drafted_date    = today,
+            discord_id      = discord_id_str,
             roblox_username = roblox_username,
         )
     else:
-        # Tab is empty — no template row exists yet; fall back to static values.
+        # Tab is empty — no template row yet; fall back to static values.
         row_width = COL_ACTIVITY + 1
-        new_row = [""] * row_width
+        new_row   = [""] * row_width
         new_row[COL_RANK]       = effective_rank
         new_row[COL_TIMEZONE]   = timezone_str
         new_row[COL_DRAFTED]    = today
-        new_row[COL_DAYS_SINCE] = f"=DATEDIF(H{new_row_1idx},TODAY(),\"D\")&\" days\""
+        new_row[COL_DAYS_SINCE] = f'=DATEDIF(H{new_row_1idx},TODAY(),"D")&" days"'
         new_row[COL_DISCORD_ID] = discord_id_str
         new_row[COL_USERNAME]   = roblox_username
         target_ws.insert_rows([new_row], row=new_row_1idx, value_input_option="USER_ENTERED")
 
     # ── Update Stats map ───────────────────────────────────────────────────────
+    stats_ws = _worksheet("Stats")
     if stats_rows:
         stats_keep = stats_rows[-1]
-        # Blank out any duplicates
         for r in reversed(stats_rows[:-1]):
             stats_ws.update(f"AO{r}:AQ{r}", [["", "", ""]], value_input_option="USER_ENTERED")
         stats_ws.update(
@@ -423,15 +451,9 @@ def sync_induct(
             value_input_option="USER_ENTERED",
         )
     else:
-        # No Stats entry yet — find the next free row and create one
-        stats_all = stats_ws.get_all_values()
-        last_stats_row = max(
-            (i + 1 for i, row in enumerate(stats_all)
-             if len(row) > STATS_COL_DISCORD_ID and str(row[STATS_COL_DISCORD_ID]).strip()),
-            default=0,
-        )
+        new_stats_row = _find_last_stats_row_in_data(stats_data) + 1
         stats_ws.update(
-            f"AO{last_stats_row + 1}:AQ{last_stats_row + 1}",
+            f"AO{new_stats_row}:AQ{new_stats_row}",
             [[discord_id_str, effective_regiment, roblox_username]],
             value_input_option="USER_ENTERED",
         )
@@ -453,21 +475,25 @@ def sync_promote(
 ) -> bool:
     """
     Update the Rank/Position cell for a member in their current regiment tab.
-    Looks them up by Discord ID in the Stats map first to find the right tab.
-    Falls back to a full scan if the Stats map is stale.
+
+    Loads Stats + the indicated regiment tab in one pass. Falls back to a full
+    scan (loading all regiment tabs) only if the Stats map is stale.
 
     Returns True on success, False if member not found anywhere.
     """
-    stats_result = _find_member_in_stats(discord_id)
+    # ── Load Stats first ──────────────────────────────────────────────────────
+    stats_data   = _load_all_data(["Stats"])["Stats"]
+    stats_result = _find_member_in_stats_data(stats_data, discord_id)
 
     # ── Try Stats-map-indicated tab first ─────────────────────────────────────
     if stats_result:
         _, regiment_full_name, sheet_username = stats_result
         tab_name = REGIMENT_TO_TAB.get(regiment_full_name)
         if tab_name:
-            ws = _worksheet(tab_name)
-            member_row = _find_member_row_in_tab(ws, discord_id)
+            tab_data   = _load_all_data([tab_name])
+            member_row = _find_member_row_in_data(tab_data[tab_name], discord_id)
             if member_row is not None:
+                ws              = _worksheet(tab_name)
                 rank_col_letter = _col_letter(COL_RANK + 1)
                 ws.update(f"{rank_col_letter}{member_row}", [[new_rank_label]], value_input_option="USER_ENTERED")
                 log.info(
@@ -485,47 +511,53 @@ def sync_promote(
     else:
         log.warning(f"[sheets_sync] promote: discord_id {discord_id} not found in Stats map — scanning all tabs")
 
-    # ── Fallback: scan every known regiment tab ────────────────────────────────
-    for tab_name in REGIMENT_TO_TAB.values():
-        try:
-            ws = _worksheet(tab_name)
-        except Exception:
-            continue
-        member_row = _find_member_row_in_tab(ws, discord_id)
+    # ── Fallback: load all regiment tabs at once and scan ─────────────────────
+    all_tab_data = _load_all_data(list(REGIMENT_TO_TAB.values()))
+    for tab_name, data in all_tab_data.items():
+        member_row = _find_member_row_in_data(data, discord_id)
         if member_row is not None:
+            ws              = _worksheet(tab_name)
             rank_col_letter = _col_letter(COL_RANK + 1)
             ws.update(f"{rank_col_letter}{member_row}", [[new_rank_label]], value_input_option="USER_ENTERED")
             log.info(
                 f"[sheets_sync] Promoted discord_id={discord_id} in {tab_name} row {member_row} "
                 f"to {new_rank_label!r} (found via fallback scan)"
             )
-            _repair_stats_entry(discord_id, tab_name, roblox_username)
+            _repair_stats_entry(discord_id, tab_name, roblox_username, stats_data=stats_data)
             return True
 
     log.warning(f"[sheets_sync] promote: {discord_id} not found in any regiment tab")
     return False
 
 
-def _repair_stats_entry(discord_id: str, correct_tab: str, roblox_username: Optional[str]) -> None:
+def _repair_stats_entry(
+    discord_id: str,
+    correct_tab: str,
+    roblox_username: Optional[str],
+    stats_data: Optional[list[list[str]]] = None,
+) -> None:
     """
-    Update (or create) the Stats map entry so it points to `correct_tab`.
-    Clears any duplicate entries.
+    Update (or create) the Stats map entry so it points to correct_tab.
+    Accepts pre-fetched stats_data to avoid an extra API call when the
+    caller already has it in hand.
     """
     correct_regiment = TAB_TO_REGIMENT.get(correct_tab, correct_tab)
-    stats_ws = _worksheet("Stats")
-    col_values = stats_ws.col_values(STATS_COL_DISCORD_ID + 1)
-    discord_id_str = str(discord_id)
+    stats_ws         = _worksheet("Stats")
+    discord_id_str   = str(discord_id)
+
+    if stats_data is None:
+        stats_data = stats_ws.get_all_values()
 
     existing_rows = [
-        idx + 1 for idx, cell in enumerate(col_values)
-        if str(cell).strip() == discord_id_str
+        i + 1 for i, row in enumerate(stats_data)
+        if len(row) > STATS_COL_DISCORD_ID and str(row[STATS_COL_DISCORD_ID]).strip() == discord_id_str
     ]
 
     if existing_rows:
-        for i, row_1idx in enumerate(existing_rows):
-            if i == 0:
-                row_data = stats_ws.row_values(row_1idx)
-                username = roblox_username or (row_data[STATS_COL_USERNAME] if len(row_data) > STATS_COL_USERNAME else "")
+        for idx, row_1idx in enumerate(existing_rows):
+            if idx == 0:
+                row      = stats_data[row_1idx - 1]
+                username = roblox_username or (row[STATS_COL_USERNAME] if len(row) > STATS_COL_USERNAME else "")
                 stats_ws.update(
                     f"AO{row_1idx}:AQ{row_1idx}",
                     [[discord_id_str, correct_regiment, username]],
@@ -536,13 +568,7 @@ def _repair_stats_entry(discord_id: str, correct_tab: str, roblox_username: Opti
                 stats_ws.update(f"AO{row_1idx}:AQ{row_1idx}", [["", "", ""]], value_input_option="USER_ENTERED")
                 log.warning(f"[sheets_sync] Cleared duplicate Stats map entry at row {row_1idx} for {discord_id}")
     else:
-        stats_all = stats_ws.get_all_values()
-        last_stats_row = max(
-            (i + 1 for i, row in enumerate(stats_all)
-             if len(row) > STATS_COL_DISCORD_ID and str(row[STATS_COL_DISCORD_ID]).strip()),
-            default=0,
-        )
-        new_row = last_stats_row + 1
+        new_row = _find_last_stats_row_in_data(stats_data) + 1
         stats_ws.update(
             f"AO{new_row}:AQ{new_row}",
             [[discord_id_str, correct_regiment, roblox_username or ""]],
@@ -562,26 +588,30 @@ def sync_promote_draft(
       1. Delete the member's old row in their current regiment tab.
       2. Update their Stats map entry with the new regiment.
       3. Insert a fresh Cavalier row in the target regiment tab,
-         copying formulas from the row above so computed columns work correctly.
-         The member's original drafted date is preserved.
+         copying formulas from the row above. The member's original
+         drafted date is preserved.
 
     Returns True on success.
     """
     old_drafted_date = _today_str()
 
-    stats_result = _find_member_in_stats(discord_id)
+    # ── Load Stats + all regiment tabs in one pass ────────────────────────────
+    all_tabs     = list(REGIMENT_TO_TAB.values()) + ["Stats"]
+    tab_data     = _load_all_data(all_tabs)
+    stats_data   = tab_data["Stats"]
+    stats_result = _find_member_in_stats_data(stats_data, discord_id)
+
     if stats_result:
         stats_row_1idx, old_regiment_full_name, sheet_username = stats_result
         old_tab = REGIMENT_TO_TAB.get(old_regiment_full_name)
 
         if old_tab:
-            old_ws = _worksheet(old_tab)
-            old_member_row = _find_member_row_in_tab(old_ws, discord_id)
+            old_member_row = _find_member_row_in_data(tab_data[old_tab], discord_id)
             if old_member_row is not None:
-                old_row_data = old_ws.row_values(old_member_row)
-                if len(old_row_data) > COL_DRAFTED and old_row_data[COL_DRAFTED].strip():
-                    old_drafted_date = old_row_data[COL_DRAFTED].strip()
-                old_ws.delete_rows(old_member_row)
+                old_row = tab_data[old_tab][old_member_row - 1]
+                if len(old_row) > COL_DRAFTED and old_row[COL_DRAFTED].strip():
+                    old_drafted_date = old_row[COL_DRAFTED].strip()
+                _worksheet(old_tab).delete_rows(old_member_row)
                 log.info(f"[sheets_sync] draft_transfer: deleted {discord_id} from {old_tab} row {old_member_row}")
             else:
                 log.warning(f"[sheets_sync] draft_transfer: {discord_id} not found in old tab {old_tab}")
@@ -589,8 +619,7 @@ def sync_promote_draft(
             log.warning(f"[sheets_sync] draft_transfer: unknown old regiment {old_regiment_full_name!r}")
 
         new_regiment_full_name = TAB_TO_REGIMENT.get(target_tab, target_brigade)
-        stats_ws = _worksheet("Stats")
-        stats_ws.update(
+        _worksheet("Stats").update(
             f"AO{stats_row_1idx}:AQ{stats_row_1idx}",
             [[discord_id, new_regiment_full_name, roblox_username]],
             value_input_option="USER_ENTERED",
@@ -599,22 +628,20 @@ def sync_promote_draft(
     else:
         log.warning(f"[sheets_sync] draft_transfer: {discord_id} not in Stats map; creating new Stats entry")
         new_regiment_full_name = TAB_TO_REGIMENT.get(target_tab, target_brigade)
-        stats_ws = _worksheet("Stats")
-        stats_all = stats_ws.get_all_values()
-        last_stats_row = max(
-            (i + 1 for i, row in enumerate(stats_all)
-             if len(row) > STATS_COL_DISCORD_ID and str(row[STATS_COL_DISCORD_ID]).strip()),
-            default=0,
-        )
-        stats_ws.update(
-            f"AO{last_stats_row + 1}:AQ{last_stats_row + 1}",
+        new_stats_row          = _find_last_stats_row_in_data(stats_data) + 1
+        _worksheet("Stats").update(
+            f"AO{new_stats_row}:AQ{new_stats_row}",
             [[discord_id, new_regiment_full_name, roblox_username]],
             value_input_option="USER_ENTERED",
         )
 
     # ── Insert new Cavalier row in target regiment tab ─────────────────────────
+    # Re-fetch target tab data if we just deleted from it (row indices shifted).
+    if stats_result and REGIMENT_TO_TAB.get(stats_result[1]) == target_tab:
+        tab_data[target_tab] = _worksheet(target_tab).get_all_values()
+
     target_ws    = _worksheet(target_tab)
-    last_row     = _find_last_data_row(target_ws)
+    last_row     = _find_last_data_row_in_data(tab_data[target_tab])
     new_row_1idx = last_row + 1
 
     if last_row >= FIRST_RANKER_ROW_1IDX:
@@ -629,11 +656,11 @@ def sync_promote_draft(
         )
     else:
         row_width = COL_ACTIVITY + 1
-        new_row = [""] * row_width
+        new_row   = [""] * row_width
         new_row[COL_RANK]       = "Cavalier"
         new_row[COL_TIMEZONE]   = ""
         new_row[COL_DRAFTED]    = old_drafted_date
-        new_row[COL_DAYS_SINCE] = f"=DATEDIF(H{new_row_1idx},TODAY(),\"D\")&\" days\""
+        new_row[COL_DAYS_SINCE] = f'=DATEDIF(H{new_row_1idx},TODAY(),"D")&" days"'
         new_row[COL_DISCORD_ID] = discord_id
         new_row[COL_USERNAME]   = roblox_username
         target_ws.insert_rows([new_row], row=new_row_1idx, value_input_option="USER_ENTERED")
@@ -656,10 +683,15 @@ def sync_purge(
     Remove a member from their regiment tab and Stats map.
     If purged=True, also appends to the Purged tab.
 
+    Loads Stats once up front; only fetches the member's regiment tab
+    (no full scan needed — Stats map tells us where they live).
+
     Returns True if the member was found and removed, False otherwise.
     """
-    # ── 1. Find in Stats map ──────────────────────────────────────────────────
-    stats_result = _find_member_in_stats(discord_id)
+    # ── Load Stats once ───────────────────────────────────────────────────────
+    stats_data   = _load_all_data(["Stats"])["Stats"]
+    stats_result = _find_member_in_stats_data(stats_data, discord_id)
+
     if not stats_result:
         log.warning(f"[sheets_sync] purge: discord_id {discord_id} not found in Stats map")
         return False
@@ -667,30 +699,29 @@ def sync_purge(
     stats_row_1idx, regiment_full_name, sheet_username = stats_result
     tab_name = REGIMENT_TO_TAB.get(regiment_full_name)
 
-    # ── 2. Remove from regiment tab ───────────────────────────────────────────
+    # ── Remove from regiment tab ──────────────────────────────────────────────
     if tab_name:
-        ws = _worksheet(tab_name)
-        member_row = _find_member_row_in_tab(ws, discord_id)
+        tab_data   = _load_all_data([tab_name])
+        member_row = _find_member_row_in_data(tab_data[tab_name], discord_id)
         if member_row is not None:
-            ws.delete_rows(member_row)
+            _worksheet(tab_name).delete_rows(member_row)
             log.info(f"[sheets_sync] Deleted {sheet_username} from {tab_name} row {member_row}")
         else:
             log.warning(f"[sheets_sync] purge: {discord_id} not found in tab {tab_name}")
     else:
         log.warning(f"[sheets_sync] purge: unknown regiment tab for {regiment_full_name!r}")
 
-    # ── 3. Remove from Stats map ──────────────────────────────────────────────
-    stats_ws = _worksheet("Stats")
-    stats_ws.update(
+    # ── Remove from Stats map ─────────────────────────────────────────────────
+    _worksheet("Stats").update(
         f"AO{stats_row_1idx}:AQ{stats_row_1idx}",
         [["", "", ""]],
         value_input_option="USER_ENTERED",
     )
     log.info(f"[sheets_sync] Cleared Stats map entry at row {stats_row_1idx}")
 
-    # ── 4. Append to Purged tab to log purged users ──────────────────────────
+    # ── Append to Purged tab ──────────────────────────────────────────────────
     if purged:
-        bl_ws = _worksheet("Purged")
+        bl_ws     = _worksheet("Purged")
         timestamp = datetime.now(timezone.utc).isoformat()
         bl_ws.append_row(
             [roblox_username, roblox_id, discord_id, display_name, timestamp],
