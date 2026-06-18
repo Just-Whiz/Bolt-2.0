@@ -42,7 +42,12 @@ log = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
+# The CAV roster spreadsheet (regiment tabs, Stats map)
 SPREADSHEET_ID       = os.getenv("CAV_SPREADSHEET_ID", "1pPs_Kmcfzz2yu5JUrqCGdrEpVdmXMOLMwHfGGdmGxwY")
+
+# The Purged / log spreadsheet — target for the Purged tab
+PURGE_SPREADSHEET_ID = os.getenv("PURGE_SPREADSHEET_ID", "1m4IWGs9mwK4arKFKCfwpY1K6kmth7YouLRQFz_5u15Q")
+
 SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "credentials.json")
 
 SCOPES = [
@@ -109,25 +114,40 @@ STATS_COL_DISCORD_ID = 40
 STATS_COL_REGIMENT   = 41
 STATS_COL_USERNAME   = 42
 
+import threading
+
 # ── Client singleton ───────────────────────────────────────────────────────────
 
-_gc: Optional[gspread.Client] = None
-_spreadsheet: Optional[gspread.Spreadsheet] = None
+_singleton_lock:      threading.Lock               = threading.Lock()
+_gc: Optional[gspread.Client]                       = None
+_spreadsheet: Optional[gspread.Spreadsheet]         = None
+_purge_spreadsheet: Optional[gspread.Spreadsheet]   = None
 
 
 def _get_client() -> gspread.Client:
     global _gc
-    if _gc is None:
-        creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
-        _gc = gspread.authorize(creds)
-    return _gc
+    with _singleton_lock:
+        if _gc is None:
+            creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+            _gc = gspread.authorize(creds)
+        return _gc
 
 
 def _get_spreadsheet() -> gspread.Spreadsheet:
     global _spreadsheet
-    if _spreadsheet is None:
-        _spreadsheet = _get_client().open_by_key(SPREADSHEET_ID)
-    return _spreadsheet
+    with _singleton_lock:
+        if _spreadsheet is None:
+            _spreadsheet = _get_client().open_by_key(SPREADSHEET_ID)
+        return _spreadsheet
+
+
+def _get_purge_spreadsheet() -> gspread.Spreadsheet:
+    """Return the spreadsheet that contains the Purged tab (separate workbook)."""
+    global _purge_spreadsheet
+    with _singleton_lock:
+        if _purge_spreadsheet is None:
+            _purge_spreadsheet = _get_client().open_by_key(PURGE_SPREADSHEET_ID)
+        return _purge_spreadsheet
 
 
 def _worksheet(tab_name: str) -> gspread.Worksheet:
@@ -279,7 +299,9 @@ def _insert_row_with_formulas(
     spreadsheet = _get_spreadsheet()
     template_row_1idx = new_row_1idx - 1
 
-    creds   = _get_client().http_client.auth
+    # gspread 5.x exposes credentials via .http_client.credentials; 6.x via .auth
+    gc = _get_client()
+    creds = getattr(gc, "auth", None) or getattr(gc.http_client, "credentials", None) or gc.http_client.auth
     service = googleapiclient.discovery.build("sheets", "v4", credentials=creds, cache_discovery=False)
 
     tab_title      = ws.title
@@ -678,60 +700,100 @@ def sync_purge(
     roblox_id: str,
     display_name: str,
     purged: bool,
+    purge_date: str = "",
 ) -> bool:
     """
-    Remove a member from their regiment tab and Stats map.
-    If purged=True, also appends to the Purged tab.
+    Remove a member from their regiment tab and Stats map, then log them
+    in the Purged tab of the purge spreadsheet.
 
-    Loads Stats once up front; only fetches the member's regiment tab
-    (no full scan needed — Stats map tells us where they live).
+    Purged tab column layout (A–E, data starts at row 4):
+      A = Discord User  (display name)
+      B = Roblox User   (username)
+      C = Discord User ID
+      D = Roblox User ID
+      E = Purged on     (MM/DD/YYYY HH:MM UTC)
 
-    Returns True if the member was found and removed, False otherwise.
+    If the member is NOT on the roster, the function still logs them to
+    the Purged tab with whatever info is available, and returns False.
+    Returns True if the member was found and removed from the roster.
     """
+    discord_id_str = str(discord_id)
+
     # ── Load Stats once ───────────────────────────────────────────────────────
     stats_data   = _load_all_data(["Stats"])["Stats"]
-    stats_result = _find_member_in_stats_data(stats_data, discord_id)
+    stats_result = _find_member_in_stats_data(stats_data, discord_id_str)
 
-    if not stats_result:
-        log.warning(f"[sheets_sync] purge: discord_id {discord_id} not found in Stats map")
-        return False
+    found_in_roster = False
 
-    stats_row_1idx, regiment_full_name, sheet_username = stats_result
-    tab_name = REGIMENT_TO_TAB.get(regiment_full_name)
+    if stats_result:
+        stats_row_1idx, regiment_full_name, sheet_username = stats_result
+        tab_name = REGIMENT_TO_TAB.get(regiment_full_name)
 
-    # ── Remove from regiment tab ──────────────────────────────────────────────
-    if tab_name:
-        tab_data   = _load_all_data([tab_name])
-        member_row = _find_member_row_in_data(tab_data[tab_name], discord_id)
-        if member_row is not None:
-            _worksheet(tab_name).delete_rows(member_row)
-            log.info(f"[sheets_sync] Deleted {sheet_username} from {tab_name} row {member_row}")
+        # ── Remove from regiment tab ──────────────────────────────────────────
+        if tab_name:
+            tab_data   = _load_all_data([tab_name])
+            member_row = _find_member_row_in_data(tab_data[tab_name], discord_id_str)
+            if member_row is not None:
+                _worksheet(tab_name).delete_rows(member_row)
+                found_in_roster = True
+                log.info(f"[sheets_sync] Deleted {sheet_username} from {tab_name} row {member_row}")
+            else:
+                log.warning(f"[sheets_sync] purge: {discord_id} not found in tab {tab_name}")
         else:
-            log.warning(f"[sheets_sync] purge: {discord_id} not found in tab {tab_name}")
+            log.warning(f"[sheets_sync] purge: unknown regiment tab for {regiment_full_name!r}")
+
+        # ── Remove from Stats map ─────────────────────────────────────────────
+        _worksheet("Stats").update(
+            f"AO{stats_row_1idx}:AQ{stats_row_1idx}",
+            [["", "", ""]],
+            value_input_option="USER_ENTERED",
+        )
+        log.info(f"[sheets_sync] Cleared Stats map entry at row {stats_row_1idx}")
     else:
-        log.warning(f"[sheets_sync] purge: unknown regiment tab for {regiment_full_name!r}")
+        log.warning(
+            f"[sheets_sync] purge: discord_id {discord_id} not found in Stats map "
+            f"— logging to Purged tab without roster removal"
+        )
 
-    # ── Remove from Stats map ─────────────────────────────────────────────────
-    _worksheet("Stats").update(
-        f"AO{stats_row_1idx}:AQ{stats_row_1idx}",
-        [["", "", ""]],
-        value_input_option="USER_ENTERED",
-    )
-    log.info(f"[sheets_sync] Cleared Stats map entry at row {stats_row_1idx}")
-
-    # ── Append to Purged tab ──────────────────────────────────────────────────
+    # ── Append to Purged tab (always, regardless of roster presence) ──────────
+    #
+    # Purged tab layout (rows 1-3 are headers, data starts at row 4):
+    #   Row 1: "PURGED USERS" banner + warning text
+    #   Row 2: blank spacer
+    #   Row 3: Discord User | Roblox User | Discord User ID | Roblox User ID | Purged on
+    #   Row 4+: data
+    #
+    # Columns (A–E):
+    #   A = Discord User  (display name)
+    #   B = Roblox User   (username)
+    #   C = Discord User ID
+    #   D = Roblox User ID
+    #   E = Purged on     (date + time UTC)
     if purged:
-        bl_ws     = _worksheet("Purged")
-        timestamp = datetime.now(timezone.utc).isoformat()
-        bl_ws.append_row(
-            [roblox_username, roblox_id, discord_id, display_name, timestamp],
+        now_utc        = datetime.now(timezone.utc)
+        effective_date = purge_date or now_utc.strftime("%m/%d/%Y")
+        purge_time     = now_utc.strftime("%H:%M") + " UTC"
+        purged_on      = f"{effective_date} {purge_time}"
+
+        purge_ws = _get_purge_spreadsheet().worksheet("Purged")
+        purge_ws.append_row(
+            [
+                display_name or "Unknown",      # A – Discord User (display name)
+                roblox_username or "Unknown",   # B – Roblox User
+                discord_id_str,                 # C – Discord User ID
+                roblox_id or "Unknown",         # D – Roblox User ID
+                purged_on,                      # E – Purged on
+            ],
             value_input_option="USER_ENTERED",
             insert_data_option="INSERT_ROWS",
-            table_range="A1",
+            table_range="A4",
         )
-        log.info(f"[sheets_sync] Appended {roblox_username} to the Purged tab")
+        log.info(
+            f"[sheets_sync] Appended {display_name!r} / {roblox_username!r} to the Purged tab "
+            f"(found_in_roster={found_in_roster})"
+        )
 
-    return True
+    return found_in_roster
 
 
 # ── Async wrappers (call these from discord.py commands) ───────────────────────
@@ -746,8 +808,13 @@ async def async_sync_induct(
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         None,
-        sync_induct,
-        discord_id, roblox_username, regiment_full_name, rank_label, timezone_str,
+        lambda: sync_induct(
+            discord_id=discord_id,
+            roblox_username=roblox_username,
+            regiment_full_name=regiment_full_name,
+            rank_label=rank_label,
+            timezone_str=timezone_str,
+        ),
     )
 
 async def async_sync_promote(
@@ -758,8 +825,11 @@ async def async_sync_promote(
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         None,
-        sync_promote,
-        discord_id, new_rank_label, roblox_username,
+        lambda: sync_promote(
+            discord_id=discord_id,
+            new_rank_label=new_rank_label,
+            roblox_username=roblox_username,
+        ),
     )
 
 
@@ -769,12 +839,19 @@ async def async_sync_purge(
     roblox_id: str,
     display_name: str,
     purged: bool,
+    purge_date: str = "",
 ) -> bool:
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         None,
-        sync_purge,
-        discord_id, roblox_username, roblox_id, display_name, purged,
+        lambda: sync_purge(
+            discord_id=discord_id,
+            roblox_username=roblox_username,
+            roblox_id=roblox_id,
+            display_name=display_name,
+            purged=purged,
+            purge_date=purge_date,
+        ),
     )
 
 
@@ -787,6 +864,52 @@ async def async_sync_promote_draft(
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         None,
-        sync_promote_draft,
-        discord_id, roblox_username, target_brigade, target_tab,
+        lambda: sync_promote_draft(
+            discord_id=discord_id,
+            roblox_username=roblox_username,
+            target_brigade=target_brigade,
+            target_tab=target_tab,
+        ),
+    )
+
+# ── Purge-tab-only append (used by the-yard auto-purge path) ──────────────────
+
+def sync_purge_log_only(
+    roblox_username: str,
+    roblox_id: str,
+    discord_id: str,
+    display_name: str,
+    purge_date: str,
+    purge_time: str,
+) -> None:
+    """
+    Append a row directly to the Purged tab WITHOUT touching the roster.
+
+    Used by the #the-yard listener where all we want is a log entry with
+    the exact message timestamp, not a full roster removal.
+
+    Purged tab column layout (A–E, data starts at row 4):
+      A = Discord User  (display name)
+      B = Roblox User   (username)
+      C = Discord User ID
+      D = Roblox User ID
+      E = Purged on     (date + time UTC)
+    """
+    purged_on = f"{purge_date} {purge_time}"
+    purge_ws  = _get_purge_spreadsheet().worksheet("Purged")
+    purge_ws.append_row(
+        [
+            display_name or "Unknown",      # A – Discord User
+            roblox_username or "Unknown",   # B – Roblox User
+            discord_id,                     # C – Discord User ID
+            roblox_id or "Unknown",         # D – Roblox User ID
+            purged_on,                      # E – Purged on
+        ],
+        value_input_option="USER_ENTERED",
+        insert_data_option="INSERT_ROWS",
+        table_range="A4",
+    )
+    log.info(
+        f"[sheets_sync] sync_purge_log_only: appended {display_name!r} ({discord_id}) "
+        f"to Purged tab at {purged_on}"
     )

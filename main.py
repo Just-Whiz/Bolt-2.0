@@ -23,6 +23,7 @@ from sheets_sync import (
     async_sync_promote,
     async_sync_promote_draft,
     async_sync_purge,
+    sync_purge_log_only,
 )
 
 load_dotenv()
@@ -1403,13 +1404,13 @@ async def on_ready():
             ]
             if members_to_process:
                 print(
-                    f"[AUTO-BLACKLIST] Scanning the-yard on startup — "
+                    f"[AUTO-PURGE] Scanning the-yard on startup — "
                     f"{len(members_to_process)} unblacklisted member(s) with access."
                 )
                 for member in members_to_process:
                     await _blacklist_member(member, real_guild, notify_channel=None)
                     await asyncio.sleep(1)   # gentle rate-limit between members
-                print("[AUTO-BLACKLIST] Startup scan complete.")
+                print("[AUTO-PURGE] Startup scan complete.")
 
 @bot.event
 async def on_member_update(before: discord.Member, after: discord.Member):
@@ -1428,61 +1429,82 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
-    # Auto-blacklist logic for "the-yard" channel
+    # Auto-log logic for "the-yard" channel — log every @mention to the Purged tab
     if message.channel.name == "the-yard" and message.mentions:
         for member in message.mentions:
-            await _blacklist_member(member, message.guild, message.channel)
+            await _blacklist_member(member, message.guild, message.channel, event_timestamp=message.created_at)
 
 
 async def _blacklist_member(
     member: discord.Member,
     guild: discord.Guild,
     notify_channel: discord.abc.Messageable | None = None,
+    event_timestamp: "datetime | None" = None,
 ) -> None:
     """Apply the full blacklist treatment to a single member.
 
-    Called both from the on_message handler (new mentions) and from the
+    Called both from the on_message handler (new mentions in #the-yard) and from the
     on_ready scan (members already present in the-yard when the bot starts).
+
+    When called from on_message, event_timestamp should be message.created_at so the
+    Purged tab row uses the actual time the mention was sent rather than "now".
     """
     try:
-        # 1. Assign Discord Blacklist Role
+        # 1. Assign Discord Purged Role
         bl_role = get_role(guild, PURGED_ROLE)
         if bl_role and bl_role not in member.roles:
-            await member.add_roles(bl_role, reason="Auto-blacklisted via the-yard")
+            await member.add_roles(bl_role, reason="Auto-purged via the-yard mention")
 
-        # 2. Get Roblox ID and Kick from Cav Group
+        # 2. Strip all other roles
+        roles_to_strip = [r for r in member.roles if r.name != "@everyone" and r != bl_role]
+        if roles_to_strip:
+            try:
+                await member.remove_roles(*roles_to_strip, reason="Auto-purge: the-yard mention")
+            except discord.Forbidden:
+                for role in roles_to_strip:
+                    try:
+                        await member.remove_roles(role, reason="Auto-purge: the-yard mention")
+                    except discord.Forbidden:
+                        pass
+
+        # 3. Get Roblox ID and Kick from Cav Group
         roblox = await resolve_roblox_user(str(member.id))
         roblox_id, username = "Unknown", "Unknown"
         if roblox:
             roblox_id = roblox.get("roblox_id", "Unknown")
-            username = roblox.get("roblox_username", "Unknown")
+            username  = roblox.get("roblox_username", "Unknown")
             if roblox_id != "Unknown":
-                await roblox_ban_user(roblox_id, CAV_GROUP_ID, reason="Auto-blacklisted via the-yard")
+                await roblox_ban_user(roblox_id, CAV_GROUP_ID, reason="Auto-purged via the-yard mention")
 
-        # 3. Write data to the Spreadsheet
-        if sheets_client:
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(
-                None,
-                append_to_blacklisted_sheet,
-                username,
-                roblox_id,
-                str(member.id),
-                member.display_name,
-            )
+        # 4. Log to the Purged tab with the message timestamp
+        now_utc       = event_timestamp or datetime.now(timezone.utc)
+        purge_date    = now_utc.strftime("%m/%d/%Y")
+        purge_time    = now_utc.strftime("%H:%M") + " UTC"
+
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None,
+            sync_purge_log_only,
+            username,
+            str(roblox_id),
+            str(member.id),
+            member.display_name,
+            purge_date,
+            purge_time,
+        )
 
         msg = (
-            f"✅ Auto-blacklisted **{member.display_name}** (Roblox: {username}). "
-            f"Kicked from group and logged to the Cav spreadsheet."
+            f"✅ Auto-purged **{member.display_name}** (Roblox: {username}). "
+            f"Kicked from group and logged to the Purged tab."
         )
-        log.info(f"[AUTO-BLACKLIST] {member} blacklisted (Roblox: {username})")
+        log.info(f"[AUTO-PURGE] {member} purged via the-yard (Roblox: {username})")
         if notify_channel:
             await notify_channel.send(msg)
 
     except Exception as e:
-        log.error(f"[AUTO-BLACKLIST] Error processing {member}: {e}")
+        log.error(f"[AUTO-PURGE] Error processing {member}: {e}")
         if notify_channel:
-            await notify_channel.send(f"❌ Error auto-blacklisting {member.display_name}: {e}")
+            await notify_channel.send(f"❌ Error auto-purging {member.display_name}: {e}")
 
 
 # ============================================================
@@ -1878,8 +1900,6 @@ async def purge(interaction: discord.Interaction, users: str):
 
     await interaction.response.send_message("⏳ Processing…", ephemeral=True)
 
-    do_blacklist = True  # /purge always blacklists
-
     for discord_id in mentions:
         try:
             print(f"[PURGE] Processing target {discord_id}…")
@@ -1944,21 +1964,29 @@ async def purge(interaction: discord.Interaction, users: str):
                         else "❌ Failed to kick from Roblox group — handle manually."
                     )
 
-            # ── Discord role strip ───────────────────────────────────────────
-            print(f"[PURGE] Stripping Discord roles for {member}…")
+            # ── Discord role strip — ALL roles except @everyone ──────────────
+            print(f"[PURGE] Stripping ALL Discord roles for {member}…")
+            roles_to_strip = [r for r in member.roles if r.name != "@everyone"]
             stripped = []
-            for name in PURGE_ROLES:
-                role = get_role(interaction.guild, name)
-                if role and role in member.roles:
-                    await member.remove_roles(role, reason="Purge: role strip")
-                    stripped.append(name)
-            print(f"[PURGE] Stripped {len(stripped)} role(s): {stripped}")
+            if roles_to_strip:
+                try:
+                    await member.remove_roles(*roles_to_strip, reason="Purge: full role strip")
+                    stripped = [r.name for r in roles_to_strip]
+                    print(f"[PURGE] Stripped {len(stripped)} role(s): {stripped}")
+                except discord.Forbidden:
+                    # Fall back to removing one by one, skipping unremovable roles
+                    for role in roles_to_strip:
+                        try:
+                            await member.remove_roles(role, reason="Purge: role strip")
+                            stripped.append(role.name)
+                        except discord.Forbidden:
+                            print(f"[PURGE] ⚠️ Cannot remove role {role.name} (Forbidden)")
             status_lines.append(
                 f"✅ Stripped {len(stripped)} role(s)." if stripped
-                else "⚠️ No matching roles found to strip."
+                else "⚠️ No roles found to strip."
             )
 
-            # ── Blacklist ────────────────────────────────────────────────────
+            # ── Apply Purged role ────────────────────────────────────────────
             bl_role = get_role(interaction.guild, PURGED_ROLE)
             if bl_role:
                 if bl_role not in member.roles:
@@ -1976,21 +2004,25 @@ async def purge(interaction: discord.Interaction, users: str):
                 print(f"[PURGE] ⚠️ {PURGED_ROLE} role not found in server")
                 status_lines.append(f"⚠️ **{PURGED_ROLE}** role not found in server.")
 
-            # ── Roster sheet sync + Blacklisted log ──────────────────────────
+            # ── Roster sheet sync + Purged tab log ──────────────────────────
             try:
+                purge_date_str = datetime.now(timezone.utc).strftime("%m/%d/%Y")
                 found = await async_sync_purge(
                     discord_id=str(discord_id),
                     roblox_username=username or "Unknown",
                     roblox_id=str(roblox_id) if roblox_id else "Unknown",
                     display_name=member.display_name,
                     purged=True,
+                    purge_date=purge_date_str,
                 )
                 if found:
                     status_lines.append("✅ Removed from roster sheet and logged to Purged tab.")
                     print(f"[PURGE] ✅ Sheet sync complete for {username or discord_id}")
                 else:
-                    status_lines.append("⚠️ Not found in roster sheet — remove manually if needed.")
-                    print(f"[PURGE] ⚠️ {username or discord_id} not found in roster sheet")
+                    status_lines.append(
+                        "⚠️ Not found in roster sheet — logged to Purged tab with available info."
+                    )
+                    print(f"[PURGE] ⚠️ {username or discord_id} not found in roster sheet; still logged to Purged tab")
             except Exception as _se:
                 status_lines.append("⚠️ Roster sheet sync failed — update manually.")
                 print(f"[PURGE] ⚠️ Sheet sync failed for {username or discord_id}: {_se}")
