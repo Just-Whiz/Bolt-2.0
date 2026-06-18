@@ -1,7 +1,7 @@
 # ============================================================
 #  Bolt 2.0 — Corps de Cavalerie Impériale Discord Bot
-#  Updated: 2026-05-30
-#  Version: 2.0.0
+#  Updated: 2026-06-18
+#  Version: 2.1.0
 # ============================================================
 
 import asyncio
@@ -41,7 +41,7 @@ CAV_GROUP_ID = os.getenv("CAV_GROUP_ID", "195387641")
 GOOGLE_SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "credentials.json")
 
 FRENCH_SPREADSHEET_ID = os.getenv("FRENCH_SPREADSHEET_ID")
-CAV_SPREADSHEET_ID = os.getenv("CAV_SPREADSHEET_ID, 1m4IWGs9mwK4arKFKCfwpY1K6kmth7YouLRQFz_5u15Q")
+CAV_SPREADSHEET_ID = os.getenv("CAV_SPREADSHEET_ID", "1m4IWGs9mwK4arKFKCfwpY1K6kmth7YouLRQFz_5u15Q")
 
 def _oc_headers() -> dict:
     return {"x-api-key": ROBLOX_OPEN_CLOUD, "Content-Type": "application/json"}
@@ -222,7 +222,6 @@ NEUTRAL_GROUP_IDS: dict[str, str] = {
 # ============================================================
 
 BRIGADES: list[str] = [
-    "BRIGADE KELLERMANN",
     "BRIGADE LASALLE",
     "BRIGADE BESSIÈRES",
 ]
@@ -230,69 +229,64 @@ BRIGADES: list[str] = [
 # Maps brigade → ordered list of regiment tab keys shown in the dropdown.
 # To add a new regiment: append its tab key here and add entries below.
 BRIGADE_TO_REGIMENT_TABS: dict[str, list[str]] = {
-    "BRIGADE KELLERMANN": ["26e"],                  # add more tab keys here as needed
-    "BRIGADE LASALLE":    ["5e", "7e", "10e"],      # 10e has no sheet tab yet
-    "BRIGADE BESSIÈRES":  ["GaC", "CaC"],           # CaC has no sheet tab yet
+    "BRIGADE LASALLE":    ["5e", "7e"],
+    "BRIGADE BESSIÈRES":  ["GaC", "CaC"],
 }
 
 # Human-readable dropdown label for each regiment tab key.
-# To add a new regiment: add its tab key → display label here.
 REGIMENT_TO_TAB_LABEL: dict[str, str] = {
-    "26e": "26e Chasseurs à Cheval de Ligne",
     "5e":  "5e Chevaux Légers Lanciers",
     "7e":  "7e Cuirassiers",
-    "10e": "10e Régiment de Hussards",
     "GaC": "Grenadiers-à-Cheval de la Garde",
     "CaC": "Chasseurs-à-Cheval de la Garde",
 }
 
-# Maps regiment tab key → Discord role name assigned on draft.
-# To add a new regiment: add its tab key → Discord role name here.
+# Maps regiment tab key → Discord role ID assigned on draft/induct.
+TAB_TO_ROLE_ID: dict[str, int] = {
+    "5e":  1492363358018605197,   # 5ème Régiment de Lanciers
+    "7e":  1492363394353856574,   # 7ème Régiment de Cuirassiers
+    "GaC": 1492363810655178914,   # Grenadiers à Cheval de la Garde Impériale
+    "CaC": 1492366739227279460,   # Chasseurs à Cheval de la Garde Impériale
+}
+
+# Maps regiment tab key → Discord role name (used for set construction and display).
 TAB_TO_DISCORD_ROLE: dict[str, str] = {
-    "26e": "26ème Régiment de Chasseurs à Cheval",
-    "5e":  "5ème Chevau-Légers Lanciers",
-    "7e":  "7ème Cuirassiers",
-    "10e": "10ème Régiment de Hussards",
+    "5e":  "5ème Régiment de Lanciers",
+    "7e":  "7ème Régiment de Cuirassiers",
     "GaC": "Grenadiers à Cheval de la Garde Impériale",
-    "CaC": "Chasseurs à Cheval de la Garde",
+    "CaC": "Chasseurs à Cheval de la Garde Impériale",
 }
 
 ALL_BRIGADE_ROLES:  set[str] = set(BRIGADES)
 ALL_REGIMENT_ROLES: set[str] = set(TAB_TO_DISCORD_ROLE.values())
-
-# Legacy alias kept so sheet_sync imports still resolve.
-BRIGADE_REGIMENTS: dict[str, list[str]] = {
-    brigade: [TAB_TO_DISCORD_ROLE[tab] for tab in tabs if tab in TAB_TO_DISCORD_ROLE]
-    for brigade, tabs in BRIGADE_TO_REGIMENT_TABS.items()
-}
 
 # ============================================================
 #  RANK CONFIGURATION
 # ============================================================
 
 DISCORD_RANKS: list[str] = [
-    "Conscrit",                       # 0
-    "Veteran",                        # 1
-    "Cavalier",                       # 2
-    "Brigadier",                      # 3
-    "Brigadier-Fourrier",             # 4
-    "Maréchal des Logis",             # 5
-    "Maréchal des Logis-Chef",        # 6  ← SENIOR_THRESHOLD
-    "Adjudant",                       # 7
-    "Adjudant Sous-Officier",         # 8
-    "Lieutenant en Second",           # 9
-    "Lieutenant en Premier",          # 10
-    "Capitaine",                      # 11
-    "Chef dÉscadron",                 # 12
-    "Major",                          # 13
-    "Colonel",                        # 14
-    "Adjudant-Commandant",            # 15
-    "Adjoint du Corps",               # 16
-    "Adjoint du General de Division", # 17
-    "Adjoint du General de Brigade",  # 18
-    "Adjoint du Marechal",            # 19
-    "Adjoint d'État Major",           # 20
-    "Commandant de Cavalerie Brigade",# 21
+    "Conscrit",                         # 0
+    "Vétéran",                          # 1
+    "Cavalier",                         # 2
+    "Brigadier",                        # 3
+    "Brigadier-Fourrier",               # 4
+    "Maréchal des Logis",               # 5
+    "Maréchal des Logis-Chef",          # 6  ← SENIOR_THRESHOLD
+    "Adjudant",                         # 7
+    "Adjudant Sous-Officier",           # 8
+    "Lieutenant en Second",             # 9
+    "Lieutenant en Premier",            # 10
+    "Capitaine",                        # 11
+    "Chef d'Escadron",                  # 12
+    "Major",                            # 13
+    "Colonel",                          # 14
+    "Adjudant-Commandant",              # 15
+    "Adjoint du Corps",                 # 16
+    "Adjoint du Général de Division",   # 17
+    "Adjoint du Général de Brigade",    # 18
+    "Adjoint du Maréchal",              # 19
+    "Adjoint d'État Major",             # 20
+    "Commandant de Cavalerie Brigade",  # 21
 ]
 
 DISCORD_RANK_INDEX: dict[str, int] = {name: i for i, name in enumerate(DISCORD_RANKS)}
@@ -323,7 +317,7 @@ SENIOR_PROMOTER_ROLES: set[str] = {
     "Commandant de Cavalerie Brigade",
     "Cavalerie État-major",
     "Admin",
-    "Géneral de Brigade",
+    "Général de Brigade",
     "Général de Division",
     "Maréchal",
     "Maréchal en Major Général",
@@ -336,7 +330,6 @@ SENIOR_PROMOTER_ROLES: set[str] = {
 # ============================================================
 
 CAV_ROBLOX_RANKS: list[tuple[int, str]] = [
-    (243, "BRIGADE KELLERMANN"),
     (244, "BRIGADE LASALLE"),
     (245, "BRIGADE BESSIÈRES"),
     (246, "Sous-Officier"),
@@ -556,8 +549,7 @@ def format_nobility_nick(grade: str, username: str) -> str:
 def strip_nobility_nick(nick: str) -> str:
     """Strip any nobility title formatting from a nickname, returning the bare username."""
     # Chevalier format: "Sir X, Chevalier" → "X"
-    import re as _re
-    m = _re.match(r"^Sir (.+), Chevalier$", nick)
+    m = re.match(r"^Sir (.+), Chevalier$", nick)
     if m:
         return m.group(1)
     # Prefixed formats: "Baron X", "Comte X", "Duc X"
@@ -583,14 +575,95 @@ ALL_SHEET_ROLES: set[str] = (
 #  INDUCT / PURGE ROLE LISTS
 # ============================================================
 
-INDUCT_ADD: list[str] = [
-    "BRIGADE KELLERMANN",
-    "26ème Régiment de Chasseurs à Cheval",
-    "Corps de Cavalerie Impériale",
-    "Cavalier",
-]
+# ============================================================
+#  DISCORD ROLE IDs
+#  Using IDs instead of names prevents silent failures when roles
+#  are renamed. Replace every 0 with the actual role ID from your server.
+#  Right-click any role in Discord (Developer Mode on) → Copy ID.
+# ============================================================
 
-INDUCT_REMOVE: list[str] = [
+ROLE_IDS: dict[str, int] = {
+    # ── Brigade roles ──────────────────────────────────────────
+    "BRIGADE LASALLE":   1492362825941913792,
+    "BRIGADE BESSIÈRES": 1492362723118288917,
+
+    # ── Regiment roles ─────────────────────────────────────────
+    "5ème Régiment de Lanciers":                                      1492363358018605197,
+    "7ème Régiment de Cuirassiers":                                   1492363394353856574,
+    "Grenadiers à Cheval de la Garde Impériale":                      1492363810655178914,
+    "Chasseurs à Cheval de la Garde Impériale":                       1492366739227279460,
+
+    # ── Membership / induction roles ───────────────────────────
+    "Corps de Cavalerie Impériale": 1492358948156735569,
+    "Cavalier":                     1492343544848056390,
+    "Purged":                       1503530449392373831,
+    "Verified":                     1498070716396867784,
+
+    # ── Pre-induction roles to remove ──────────────────────────
+    "Garde Nationale de Cavalerie": 1492385650379460759,
+    "Guest":                        1492372070938443826,
+    "Citoyen":                      1498102660962713741,
+    "Soldat":                       1498103182159777843,
+    "Caporal":                      1498083217222275165,
+    "Caporal Fourrier":             1498085081602986185,
+
+    # ── Rank roles ─────────────────────────────────────────────
+    "Conscrit":                        1492343602402037811,
+    "Vétéran":                         1492343572568211680,
+    "Brigadier":                       1492343521322074112,
+    "Brigadier-Fourrier":              1492343499151118466,
+    "Maréchal des Logis":              1492343475428004095,
+    "Maréchal des Logis-Chef":         1492343434491461822,
+    "Adjudant":                        1492343415411707934,
+    "Adjudant Sous-Officier":          1492343394817806438,
+    "Lieutenant en Second":            1492343367466746048,
+    "Lieutenant en Premier":           1492343350026571816,
+    "Capitaine":                       1492343322017136750,
+    "Chef d'Escadron":                 1492343293298868225,
+    "Major":                           1492343209307672716,
+    "Colonel":                         1492343174751060090,
+    "Adjudant-Commandant":             1502551641881055353,
+    "Adjoint du Corps":                1503933113938612374,
+    "Adjoint du Général de Division":  1492343133256683581,
+    "Adjoint du Général de Brigade":   1492343156186939392,
+    "Adjoint du Maréchal":             1492343098385371186,
+    "Adjoint d'État Major":            1492343076960604343,
+    "Commandant de Cavalerie Brigade": 1498784879888830595,
+
+    # ── Staff / État-major roles ───────────────────────────────
+    "Cavalerie État-major":       1492357272872026232,
+    "Cavalerie Petit État-major": 1492358622007529562,
+    "5ème État-major":            1496989078149660823,
+    "5ème Petit État-major":      1496989078586003537,
+    "7ème État-major":            1496989091911303388,
+    "7ème Petit État-major":      1496989095216283769,
+    "GaC État-major":             1496995866370641930,
+    "GaC Petit État-major":       1496995864101654719,
+    "Head of Administration":     1492370857543205035,
+    "Head of Recruitment":        1492370930670768128,
+    "Administration Team":        1492371103014977646,
+    "Recruitment Team":           1492371149793923265,
+
+    # ── Noble titles ───────────────────────────────────────────
+    "Duc d'Empire":       1492373020369616966,
+    "Comte d'Empire":     1492373114393460916,
+    "Baron d'Empire":     1492373120256966767,
+    "Chevalier d'Empire": 1492373124904390736,
+}
+
+def get_role(guild: "discord.Guild", name: str) -> "discord.Role | None":
+    """Look up a role by ID from ROLE_IDS, falling back to name search.
+
+    Prefers the ID map (O(1), rename-safe). Falls back to name search only
+    when a role isn't yet in the map (ID is 0 or absent), so features keep
+    working before you've filled in every ID.
+    """
+    role_id = ROLE_IDS.get(name, 0)
+    if role_id:
+        return guild.get_role(role_id)
+    return discord.utils.get(guild.roles, name=name)
+
+INDUCT_REMOVE_NAMES: list[str] = [
     "Garde Nationale de Cavalerie",
     "Guest",
     "Citoyen",
@@ -602,7 +675,19 @@ INDUCT_REMOVE: list[str] = [
     *BRIGADES,
 ]
 
-CAV_INDUCT_ROBLOX_RANK = "BRIGADE KELLERMANN"
+# Roles added for ALL inductees regardless of regiment
+INDUCT_ADD_BASE: list[str] = [
+    "Corps de Cavalerie Impériale",
+    "Cavalier",
+]
+
+# Per-regiment induction config: tab key → (brigade role name, regiment role name, nick prefix, Roblox rank)
+INDUCT_REGIMENT_CONFIG: dict[str, tuple[str, str, str, str]] = {
+    "5e":  ("BRIGADE LASALLE",   "5ème Régiment de Lanciers",                    "[5e]",  "BRIGADE LASALLE"),
+    "7e":  ("BRIGADE LASALLE",   "7ème Régiment de Cuirassiers",                 "[7e]",  "BRIGADE LASALLE"),
+    "GaC": ("BRIGADE BESSIÈRES", "Grenadiers à Cheval de la Garde Impériale",    "[GaC]", "BRIGADE BESSIÈRES"),
+    "CaC": ("BRIGADE BESSIÈRES", "Chasseurs à Cheval de la Garde Impériale",     "[CaC]", "BRIGADE BESSIÈRES"),
+}
 
 PURGE_ROLES: set[str] = (
     ALL_RANK_ROLES | ALL_BRIGADE_ROLES | ALL_REGIMENT_ROLES | ALL_SHEET_ROLES
@@ -617,10 +702,10 @@ PURGED_ROLE = "Purged"
 # ============================================================
 
 _STAFF_ROLES: set[str] = {
-    "Head of Recruitment"
+    "Head of Recruitment",
     "Administration Team",
     "Head of Administration",
-    "Cavalerie Petit État-major"
+    "Cavalerie Petit État-major",
     "26ème État-major",
     "7ème État-major",
     "5ème État-major",
@@ -641,7 +726,7 @@ _STAFF_ROLES: set[str] = {
     "Commandant de Cavalerie Brigade",
     "Cavalerie État-major",
     "Admin",
-    "Géneral de Brigade",
+    "Général de Brigade",
     "Général de Division",
     "Maréchal",
     "Maréchal en Major Général",
@@ -974,7 +1059,7 @@ async def sync_verified_users() -> None:
     guild = bot.get_guild(int(GUILD_ID))
     if not guild:
         return
-    verified_role = discord.utils.get(guild.roles, name="Verified")
+    verified_role = get_role(guild, "Verified")
     if not verified_role:
         return
     to_sync = [m for m in verified_role.members if not get_cached_user(str(m.id))]
@@ -1309,7 +1394,7 @@ async def on_ready():
     if real_guild:
         yard_channel = discord.utils.get(real_guild.text_channels, name="the-yard")
         if yard_channel:
-            bl_role = discord.utils.get(real_guild.roles, name=PURGED_ROLE)
+            bl_role = get_role(real_guild, PURGED_ROLE)
             members_to_process = [
                 m for m in real_guild.members
                 if not m.bot
@@ -1328,7 +1413,7 @@ async def on_ready():
 
 @bot.event
 async def on_member_update(before: discord.Member, after: discord.Member):
-    verified_role = discord.utils.get(after.guild.roles, name="Verified")
+    verified_role = get_role(after.guild, "Verified")
     if not verified_role:
         return
     if verified_role in before.roles or verified_role not in after.roles:
@@ -1361,7 +1446,7 @@ async def _blacklist_member(
     """
     try:
         # 1. Assign Discord Blacklist Role
-        bl_role = discord.utils.get(guild.roles, name=PURGED_ROLE)
+        bl_role = get_role(guild, PURGED_ROLE)
         if bl_role and bl_role not in member.roles:
             await member.add_roles(bl_role, reason="Auto-blacklisted via the-yard")
 
@@ -1416,7 +1501,7 @@ async def export_rosters(interaction: discord.Interaction):
     guild = interaction.guild
     
     for brigade in BRIGADES:
-        role = discord.utils.get(guild.roles, name=brigade)
+        role = get_role(guild, brigade)
         if role:
             # Sort members alphabetically by display name
             members = sorted([m.display_name for m in role.members], key=str.casefold)
@@ -1503,7 +1588,7 @@ async def background_check(interaction: discord.Interaction, users: str):
             if nob_grade and member:
                 title_role_name, _fmt = NOBILITY_ROLE_MAP[nob_grade]
                 nobility_text = f"Title: **{nob_grade}** ({title_role_name})"
-                disc_role = discord.utils.get(interaction.guild.roles, name=title_role_name)
+                disc_role = get_role(interaction.guild, title_role_name)
                 if disc_role and disc_role not in member.roles:
                     try:
                         await member.add_roles(disc_role, reason="Nobility found in sheet")
@@ -1553,23 +1638,70 @@ async def background_check(interaction: discord.Interaction, users: str):
 #  /induct
 # ============================================================
 
-@bot.tree.command(name="induct", description="Induct one or more recruits into the regiment.")
+class InductRegimentSelect(discord.ui.Select):
+    """Step 1 of /induct: pick the regiment (5e or 7e for Lasalle, GaC/CaC for Bessières)."""
+    def __init__(self):
+        options = [
+            discord.SelectOption(
+                label=REGIMENT_TO_TAB_LABEL[tab],
+                value=tab,
+                description=f"Brigade: {INDUCT_REGIMENT_CONFIG[tab][0]}",
+            )
+            for tab in INDUCT_REGIMENT_CONFIG
+        ]
+        super().__init__(
+            placeholder="Select regiment to induct into…",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        self.view.selected_tab = self.values[0]
+        await interaction.response.defer()
+        self.view.stop()
+
+
+@bot.tree.command(name="induct", description="Induct one or more recruits into a regiment.")
 @app_commands.describe(users="Mention one or more users to induct")
 async def induct(interaction: discord.Interaction, users: str):
     if not has_command_permission(interaction, "induct"):
         await interaction.response.send_message("❌ You don't have permission.", ephemeral=True)
         return
-    await interaction.response.defer()
 
     mentions = parse_mentions(users)
     print(f"[INDUCT] Invoked by {interaction.user} for {len(mentions)} target(s): {mentions}")
+    if not mentions:
+        await interaction.response.send_message(
+            "❌ No valid members mentioned. Please @mention one or more users.", ephemeral=True
+        )
+        return
+
+    # ── Step 1: ask which regiment ───────────────────────────────────────────
+    reg_view = SingleSelectView(InductRegimentSelect())
+    await interaction.response.send_message(
+        "**Step 1:** Which regiment are you inducting into?", view=reg_view, ephemeral=True
+    )
+    await reg_view.wait()
+    if reg_view.selected_tab is None:
+        await interaction.edit_original_response(content="⏱️ Timed out.", view=None)
+        return
+
+    selected_tab = reg_view.selected_tab
+    brigade_name, regiment_role_name, nick_prefix, cav_roblox_rank = INDUCT_REGIMENT_CONFIG[selected_tab]
+    regiment_label = REGIMENT_TO_TAB_LABEL[selected_tab]
+    await interaction.edit_original_response(
+        content=f"⏳ Inducting into **{regiment_label}**…", view=None
+    )
+
+    guild = interaction.guild
 
     for discord_id in mentions:
         try:
             print(f"[INDUCT] Fetching member {discord_id}…")
-            member = interaction.guild.get_member(discord_id)
+            member = guild.get_member(discord_id)
             if not member:
-                member = await asyncio.wait_for(interaction.guild.fetch_member(discord_id), timeout=10)
+                member = await asyncio.wait_for(guild.fetch_member(discord_id), timeout=10)
 
             print(f"[INDUCT] Resolving Roblox for {discord_id}…")
             roblox = await resolve_roblox_user(str(discord_id))
@@ -1583,22 +1715,22 @@ async def induct(interaction: discord.Interaction, users: str):
                 await interaction.followup.send(embed=err_embed)
                 continue
 
-            roblox_id  = roblox["roblox_id"]
-            username   = roblox["roblox_username"]
+            roblox_id = roblox["roblox_id"]
+            username  = roblox["roblox_username"]
             print(f"[INDUCT] Resolved: {username} (Roblox ID: {roblox_id})")
             avatar_url = await roblox_get_avatar_url(roblox_id)
 
-            embed = discord.Embed(
-                title="Induction Results",
-                color=discord.Color.dark_blue(),
-            )
+            embed = discord.Embed(title="Induction Results", color=discord.Color.dark_blue())
             embed.set_author(name=f"{member.display_name} ({username})", icon_url=member.display_avatar.url)
             if avatar_url:
                 embed.set_thumbnail(url=avatar_url)
-            embed.add_field(name="Discord", value=f"<@{discord_id}>", inline=True)
-            embed.add_field(name="Roblox", value=username, inline=True)
+            embed.add_field(name="Discord",  value=f"<@{discord_id}>", inline=True)
+            embed.add_field(name="Roblox",   value=username,            inline=True)
+            embed.add_field(name="Regiment", value=regiment_label,      inline=True)
             status_lines: list[str] = []
+            sheet_status_msg = ""
 
+            # ── Roblox group membership ──────────────────────────────────────
             print(f"[INDUCT] Checking Cav group rank for {username}…")
             cav_rank = await roblox_get_group_rank(roblox_id, CAV_GROUP_ID)
             print(f"[INDUCT] Cav rank: {cav_rank!r}")
@@ -1620,72 +1752,94 @@ async def induct(interaction: discord.Interaction, users: str):
             else:
                 status_lines.append(f"⚠️ Already in Cav group as **{cav_rank}**.")
 
-            if cav_rank and cav_rank.lower() == CAV_INDUCT_ROBLOX_RANK.lower():
-                status_lines.append(f"⚠️ Already ranked **{CAV_INDUCT_ROBLOX_RANK}** in Roblox.")
+            # ── Set Roblox brigade rank ──────────────────────────────────────
+            if cav_rank and cav_rank.lower() == cav_roblox_rank.lower():
+                status_lines.append(f"⚠️ Already ranked **{cav_roblox_rank}** in Roblox.")
             else:
-                print(f"[INDUCT] Setting Roblox rank to {CAV_INDUCT_ROBLOX_RANK} for {username}…")
+                print(f"[INDUCT] Setting Roblox rank to {cav_roblox_rank} for {username}…")
                 try:
                     ranked = await asyncio.wait_for(
-                        roblox_set_rank(roblox_id, CAV_GROUP_ID, CAV_INDUCT_ROBLOX_RANK), timeout=30,
+                        roblox_set_rank(roblox_id, CAV_GROUP_ID, cav_roblox_rank), timeout=30,
                     )
                     print(f"[INDUCT] Roblox rank set: {ranked}")
                     status_lines.append(
-                        f"✅ Ranked to **{CAV_INDUCT_ROBLOX_RANK}**." if ranked
+                        f"✅ Ranked to **{cav_roblox_rank}**." if ranked
                         else "❌ Failed to set Roblox rank — set manually."
                     )
                 except asyncio.TimeoutError:
                     print(f"[INDUCT] ⚠️ Roblox rank request timed out for {username}")
                     status_lines.append("⚠️ Roblox rank request timed out — set manually.")
 
-            guild = interaction.guild
+            # ── Strip pre-induction Discord roles ───────────────────────────
             stripped = []
-            for name in INDUCT_REMOVE:
-                role = discord.utils.get(guild.roles, name=name)
+            for name in INDUCT_REMOVE_NAMES:
+                role = get_role(guild, name)
                 if role and role in member.roles:
-                    await member.remove_roles(role)
+                    await member.remove_roles(role, reason="Induct: strip pre-induction roles")
                     stripped.append(name)
             status_lines.append(f"✅ Stripped: {', '.join(stripped)}" if stripped else "⚠️ No roles to strip.")
 
+            # ── Add base induction roles ─────────────────────────────────────
             added, missing = [], []
-            for name in INDUCT_ADD:
-                role = discord.utils.get(guild.roles, name=name)
+            for name in INDUCT_ADD_BASE:
+                role = get_role(guild, name)
                 if role:
                     if role not in member.roles:
-                        await member.add_roles(role)
+                        await member.add_roles(role, reason=f"Induct → {regiment_label}")
                     added.append(name)
                 else:
                     missing.append(name)
+
+            # ── Add brigade role ─────────────────────────────────────────────
+            brigade_role = get_role(guild, brigade_name)
+            if brigade_role:
+                if brigade_role not in member.roles:
+                    await member.add_roles(brigade_role, reason=f"Induct → {regiment_label}")
+                added.append(brigade_name)
+            else:
+                missing.append(brigade_name)
+
+            # ── Add regiment role ────────────────────────────────────────────
+            regiment_role = get_role(guild, regiment_role_name)
+            if regiment_role:
+                if regiment_role not in member.roles:
+                    await member.add_roles(regiment_role, reason=f"Induct → {regiment_label}")
+                added.append(regiment_role_name)
+            else:
+                missing.append(regiment_role_name)
+
             if added:   status_lines.append(f"✅ Added: {', '.join(added)}")
             if missing: status_lines.append(f"❌ Not found in server: {', '.join(missing)}")
 
-            new_nick = f"[26e] {username}"
+            # ── Set nickname ─────────────────────────────────────────────────
+            new_nick = f"{nick_prefix} {username}"[:32]
             try:
-                await member.edit(nick=new_nick)
+                await member.edit(nick=new_nick, reason=f"Induct → {regiment_label}")
                 status_lines.append(f"✅ Nickname → **{new_nick}**")
             except discord.Forbidden:
                 status_lines.append("⚠️ Cannot change nickname (bot role too low or server owner).")
             except discord.HTTPException as e:
                 status_lines.append(f"⚠️ Nickname failed: {e.text}")
 
-            embed.add_field(name="Actions", value="\n".join(status_lines), inline=False)
-            embed.set_footer(text=f"Inducted by {interaction.user} • Roblox ID: {roblox_id}")
-            print(f"[INDUCT] ✅ Done for {username} ({roblox_id})")
-            log.info(f"[INDUCT] {username} inducted by {interaction.user}")
-
             # ── Sync to CAV roster spreadsheet ──────────────────────────────
             try:
                 sheet_status_msg = await async_sync_induct(
                     discord_id=str(discord_id),
                     roblox_username=username,
-                    regiment_full_name="26e Chasseurs a Cheval de Ligne",
+                    regiment_full_name=regiment_label,
                     rank_label="Cavalier",
                 )
+                status_lines.append(f"📊 {sheet_status_msg}")
                 print(f"[INDUCT] ✅ Sheet sync complete for {username}: {sheet_status_msg}")
-            
             except Exception as _se:
                 print(f"[INDUCT] ⚠️ Sheet sync failed for {username}: {_se}")
                 log.error(f"[INDUCT] Sheet sync failed for {username}: {_se}")
-                # Non-fatal — Roblox rank and Discord roles already applied.
+                status_lines.append("⚠️ Roster sheet sync failed — update manually.")
+
+            embed.add_field(name="Actions", value="\n".join(status_lines), inline=False)
+            embed.set_footer(text=f"Inducted by {interaction.user} • {regiment_label} • Roblox ID: {roblox_id}")
+            print(f"[INDUCT] ✅ Done for {username} ({roblox_id})")
+            log.info(f"[INDUCT] {username} inducted into {regiment_label} by {interaction.user}")
 
         except asyncio.TimeoutError:
             print(f"[INDUCT] ❌ Timeout for {discord_id}")
@@ -1703,7 +1857,6 @@ async def induct(interaction: discord.Interaction, users: str):
             )
             log.error(f"[INDUCT] Error for {discord_id}: {e}")
 
-        status_lines.append(f"📊 {sheet_status_msg}")
         await interaction.followup.send(embed=embed)
 
 # ============================================================
@@ -1795,9 +1948,9 @@ async def purge(interaction: discord.Interaction, users: str):
             print(f"[PURGE] Stripping Discord roles for {member}…")
             stripped = []
             for name in PURGE_ROLES:
-                role = discord.utils.get(interaction.guild.roles, name=name)
+                role = get_role(interaction.guild, name)
                 if role and role in member.roles:
-                    await member.remove_roles(role)
+                    await member.remove_roles(role, reason="Purge: role strip")
                     stripped.append(name)
             print(f"[PURGE] Stripped {len(stripped)} role(s): {stripped}")
             status_lines.append(
@@ -1806,7 +1959,7 @@ async def purge(interaction: discord.Interaction, users: str):
             )
 
             # ── Blacklist ────────────────────────────────────────────────────
-            bl_role = discord.utils.get(interaction.guild.roles, name=PURGED_ROLE)
+            bl_role = get_role(interaction.guild, PURGED_ROLE)
             if bl_role:
                 if bl_role not in member.roles:
                     try:
@@ -1990,7 +2143,7 @@ async def medal_sync(interaction: discord.Interaction, users: str):
 
         # ── Helper: assign a single Discord role ────────────────────────────
         async def assign_role(role_name: str, source_tag: str) -> str:
-            disc_role = discord.utils.get(interaction.guild.roles, name=role_name)
+            disc_role = get_role(interaction.guild, role_name)
             if not disc_role:
                 msg = f"⚠️ **{role_name}** — not found in server."
                 print(f"[MEDAL-SYNC]   MISSING ROLE: '{role_name}' ({source_tag}) for {roblox_username}")
@@ -2145,10 +2298,11 @@ class RegimentSelect(discord.ui.Select):
 class SingleSelectView(discord.ui.View):
     def __init__(self, select: discord.ui.Select, timeout: int = 60):
         super().__init__(timeout=timeout)
-        self.promo_type: str | None = None
-        self.target_rank: str | None = None
+        self.promo_type:     str | None = None
+        self.target_rank:    str | None = None
         self.target_brigade: str | None = None
-        self.target_tab: str | None = None
+        self.target_tab:     str | None = None
+        self.selected_tab:   str | None = None   # used by InductRegimentSelect
         self.add_item(select)
 
 # ============================================================
@@ -2254,7 +2408,7 @@ async def promote(interaction: discord.Interaction, members: str):
                 status_lines.append(f"✅ Ranked to **{target_brigade}** in Roblox.")
 
             old_ranks     = [r for r in member.roles if r.name in ALL_RANK_ROLES]
-            cavalier_role = discord.utils.get(guild.roles, name=DRAFT_RESET_RANK)
+            cavalier_role = get_role(guild, DRAFT_RESET_RANK)
             try:
                 if old_ranks:     await member.remove_roles(*old_ranks, reason="Draft: rank reset")
                 if cavalier_role:
@@ -2268,7 +2422,7 @@ async def promote(interaction: discord.Interaction, members: str):
                 status_lines.append("❌ Missing permissions to modify rank roles.")
 
             old_brigades     = [r for r in member.roles if r.name in ALL_BRIGADE_ROLES]
-            new_brigade_role = discord.utils.get(guild.roles, name=target_brigade)
+            new_brigade_role = get_role(guild, target_brigade)
             try:
                 if old_brigades:     await member.remove_roles(*old_brigades, reason="Draft: brigade swap")
                 if new_brigade_role:
@@ -2281,7 +2435,7 @@ async def promote(interaction: discord.Interaction, members: str):
                 errors.append("missing permissions for brigade roles")
                 status_lines.append("❌ Missing permissions to modify brigade roles.")
 
-            new_regiment_roles = [discord.utils.get(guild.roles, name=rn) for rn in regiment_names]
+            new_regiment_roles = [get_role(guild, rn) for rn in regiment_names]
             new_regiment_roles = [r for r in new_regiment_roles if r is not None]
             new_regiment_role_names = {r.name for r in new_regiment_roles}
             # Strip all regiment roles except the one we're about to assign
@@ -2297,13 +2451,11 @@ async def promote(interaction: discord.Interaction, members: str):
                 status_lines.append("❌ Missing permissions to modify regiment roles.")
 
             # ── Update nickname regiment tag ─────────────────────────────────
-            # Replace the old [tab] prefix in the nickname with the new one.
+            # Replace the old [tag] prefix in the nickname with the new one.
             # Preserve any nobility title formatting if present.
             if username:
                 current_nick = member.nick or member.display_name
-                # Strip any existing [tag] prefix, e.g. "[26e] ", "[7e] ", "[GaC] "
-                import re as _re
-                base_nick = _re.sub(r"^\[[^\]]+\]\s*", "", current_nick)
+                base_nick = re.sub(r"^\[[^\]]+\]\s*", "", current_nick)
                 new_nick = f"[{target_tab}] {base_nick}"[:32]
                 try:
                     await member.edit(nick=new_nick, reason=f"Draft: regiment tag → [{target_tab}]")
@@ -2423,7 +2575,7 @@ async def promote(interaction: discord.Interaction, members: str):
                 discord.Color.orange(),
                 f"⚠️ **{current_rank}** is already the target rank. No change made.",
             )
-        new_role = discord.utils.get(interaction.guild.roles, name=target_rank)
+        new_role = get_role(interaction.guild, target_rank)
         if not new_role:
             return _make_embed(
                 discord.Color.red(),
